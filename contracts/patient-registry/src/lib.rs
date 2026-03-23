@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Map, String, Vec,
+    contract, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, String,
+    Vec,
 };
 
 /// --------------------
@@ -28,6 +29,17 @@ pub struct DoctorData {
 }
 
 /// --------------------
+/// Consent Types
+/// --------------------
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConsentStatus {
+    NeverSigned,
+    Pending,
+    Acknowledged,
+}
+
+/// --------------------
 /// Storage Keys
 /// --------------------
 #[contracttype]
@@ -37,6 +49,9 @@ pub enum DataKey {
     Institution(Address),
     MedicalRecords(Address),
     AuthorizedDoctors(Address),
+    Admin,
+    ConsentVersion,
+    ConsentAck(Address),
 }
 
 #[contracttype]
@@ -53,6 +68,74 @@ pub struct MedicalRegistry;
 
 #[contractimpl]
 impl MedicalRegistry {
+    // =====================================================
+    //                    ADMIN / CONSENT
+    // =====================================================
+
+    pub fn initialize(env: Env, admin: Address) {
+        if env.storage().instance().has(&DataKey::Admin) {
+            panic!("Already initialized");
+        }
+        env.storage().instance().set(&DataKey::Admin, &admin);
+    }
+
+    pub fn publish_consent_version(env: Env, version_hash: BytesN<32>) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("Not initialized");
+        admin.require_auth();
+        env.storage()
+            .persistent()
+            .set(&DataKey::ConsentVersion, &version_hash);
+        env.events().publish(
+            (symbol_short!("consent_v"), admin),
+            version_hash,
+        );
+    }
+
+    pub fn acknowledge_consent(env: Env, patient: Address, version_hash: BytesN<32>) {
+        patient.require_auth();
+        let current: BytesN<32> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ConsentVersion)
+            .expect("No consent version published");
+        if current != version_hash {
+            panic!("Version mismatch");
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::ConsentAck(patient.clone()), &version_hash);
+        env.events().publish(
+            (symbol_short!("consent_a"), patient),
+            version_hash,
+        );
+    }
+
+    pub fn get_consent_status(env: Env, patient: Address) -> ConsentStatus {
+        let current_opt: Option<BytesN<32>> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ConsentVersion);
+        let ack_opt: Option<BytesN<32>> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ConsentAck(patient));
+        match (current_opt, ack_opt) {
+            (None, _) => ConsentStatus::NeverSigned,
+            (Some(_), None) => ConsentStatus::NeverSigned,
+            (Some(current), Some(ack)) => {
+                if ack == current {
+                    ConsentStatus::Acknowledged
+                } else {
+                    ConsentStatus::Pending
+                }
+            }
+        }
+    }
+
     // =====================================================
     //                    PATIENT LOGIC
     // =====================================================
@@ -230,6 +313,11 @@ impl MedicalRegistry {
         description: String,
     ) {
         doctor.require_auth();
+
+        // Check consent
+        if Self::get_consent_status(env.clone(), patient.clone()) != ConsentStatus::Acknowledged {
+            panic!("Patient has not acknowledged current consent version");
+        }
 
         // Check access
         let access_key = DataKey::AuthorizedDoctors(patient.clone());
