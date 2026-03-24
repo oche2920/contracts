@@ -61,6 +61,7 @@ pub enum DataKey {
     RecordFee,
     Treasury,
     FeeToken,
+    TotalPatients,
 }
 
 #[contracttype]
@@ -135,7 +136,12 @@ impl MedicalRegistry {
         env.storage().instance().set(&DataKey::Treasury, &treasury);
         env.storage().instance().set(&DataKey::FeeToken, &fee_token);
         env.storage().instance().set(&DataKey::RecordFee, &0i128);
+        env.storage().instance().set(&DataKey::TotalPatients, &0u64);
     }
+
+    // =====================================================
+    //                    ADMIN / CONSENT
+    // =====================================================
 
     pub fn set_record_fee(env: Env, amount: i128) {
         let admin: Address = env
@@ -270,6 +276,14 @@ impl MedicalRegistry {
             metadata,
         };
         env.storage().persistent().set(&key, &patient);
+        let total_patients: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::TotalPatients)
+            .unwrap_or(0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::TotalPatients, &(total_patients + 1));
 
         let mut pat_list: Vec<Address> = env
             .storage()

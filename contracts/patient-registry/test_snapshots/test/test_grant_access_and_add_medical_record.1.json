@@ -410,6 +410,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "TotalPatients"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u64": "0"
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "Treasury"
                             }
                           ]

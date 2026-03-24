@@ -78,6 +78,68 @@ fn test_is_patient_registered() {
     assert!(!client.is_patient_registered(&unregistered_wallet));
 }
 
+#[test]
+fn test_total_patients_increments_on_register() {
+    let env = Env::default();
+    let contract_id = env.register(MedicalRegistry, ());
+    let client = MedicalRegistryClient::new(&env, &contract_id);
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let fee_token = Address::generate(&env);
+    client.initialize(&admin, &treasury, &fee_token);
+
+    assert_eq!(client.get_total_patients(), 0);
+
+    client.register_patient(
+        &Address::generate(&env),
+        &String::from_str(&env, "P1"),
+        &631152000,
+        &String::from_str(&env, "ipfs://p1"),
+    );
+    assert_eq!(client.get_total_patients(), 1);
+
+    client.register_patient(
+        &Address::generate(&env),
+        &String::from_str(&env, "P2"),
+        &631152001,
+        &String::from_str(&env, "ipfs://p2"),
+    );
+    assert_eq!(client.get_total_patients(), 2);
+}
+
+#[test]
+fn test_total_patients_not_incremented_on_failed_register() {
+    let env = Env::default();
+    let contract_id = env.register(MedicalRegistry, ());
+    let client = MedicalRegistryClient::new(&env, &contract_id);
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let fee_token = Address::generate(&env);
+    client.initialize(&admin, &treasury, &fee_token);
+
+    let patient_wallet = Address::generate(&env);
+    client.register_patient(
+        &patient_wallet,
+        &String::from_str(&env, "P1"),
+        &631152000,
+        &String::from_str(&env, "ipfs://p1"),
+    );
+    assert_eq!(client.get_total_patients(), 1);
+
+    let duplicate_attempt = client.try_register_patient(
+        &patient_wallet,
+        &String::from_str(&env, "P1"),
+        &631152000,
+        &String::from_str(&env, "ipfs://p1"),
+    );
+    assert!(duplicate_attempt.is_err());
+    assert_eq!(client.get_total_patients(), 1);
+}
+
 /// ------------------------------------------------
 /// DOCTOR + INSTITUTION TESTS
 /// ------------------------------------------------
