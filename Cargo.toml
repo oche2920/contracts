@@ -38,6 +38,7 @@ members = [
   "contracts/medical-device-tracking",
   "contracts/provider-registry",
   "contracts/multisig-governance",
+  "contracts/upgrade-governance",
 ]
 
 [workspace.dependencies]
