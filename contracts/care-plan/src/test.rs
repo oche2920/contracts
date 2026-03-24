@@ -1,7 +1,10 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::{Address as _, Ledger as _}, Address, BytesN, Env, String, Symbol, Vec};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, BytesN, Env, String, Symbol, Vec,
+};
 
 // -----------------------------------------------------------------------
 // Helpers
@@ -25,16 +28,15 @@ fn create_plan(env: &Env, patient: &Address, provider: &Address) -> u64 {
     let mut goals = Vec::new(env);
     goals.push_back(String::from_str(env, "Reduce HbA1c to <7%"));
 
-    client
-        .create_care_plan(
-            patient,
-            provider,
-            &Symbol::new(env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
+    client.create_care_plan(
+        patient,
+        provider,
+        &Symbol::new(env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    )
 }
 
 fn register_and_create_plan(env: &Env) -> (Address, CarePlanContractClient, u64) {
@@ -50,17 +52,15 @@ fn register_and_create_plan(env: &Env) -> (Address, CarePlanContractClient, u64)
     let mut goals = Vec::new(env);
     goals.push_back(String::from_str(env, "Lower BP to <130/80"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
     (provider, client, plan_id)
 }
@@ -81,17 +81,15 @@ fn test_create_care_plan_success() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Improve oxygen saturation"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &2_000_000u64,
-            &90u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &2_000_000u64,
+        &90u32,
+    );
 
     assert_eq!(plan_id, 1);
 }
@@ -107,29 +105,25 @@ fn test_create_care_plan_increments_ids() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal 1"));
 
-    let id1 = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let id1 = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
-    let id2 = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "preventive"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let id2 = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "preventive"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
     assert_eq!(id1, 1);
     assert_eq!(id2, 2);
@@ -146,17 +140,15 @@ fn test_create_care_plan_next_review_date_calculated() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal 1"));
 
-    client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
     let summary = client.get_care_plan_summary(&1, &provider);
     // 1_000_000 + 30 * 86_400 = 3_592_000
@@ -179,31 +171,27 @@ fn test_add_care_goal_success() {
         let mut goals = Vec::new(&env);
         goals.push_back(String::from_str(&env, "Initial goal"));
 
-        let plan_id = client
-            .create_care_plan(
-                &patient,
-                &provider,
-                &Symbol::new(&env, "chronic_disease"),
-                &conditions,
-                &goals,
-                &1_000_000u64,
-                &30u32,
-            )
-            ;
+        let plan_id = client.create_care_plan(
+            &patient,
+            &provider,
+            &Symbol::new(&env, "chronic_disease"),
+            &conditions,
+            &goals,
+            &1_000_000u64,
+            &30u32,
+        );
 
         (env, provider, client, plan_id)
     };
 
-    let goal_id = client
-        .add_care_goal(
-            &plan_id,
-            &provider,
-            &String::from_str(&env, "Reduce HbA1c below 7%"),
-            &Some(String::from_str(&env, "6.9")),
-            &2_000_000u64,
-            &Symbol::new(&env, "high"),
-        )
-        ;
+    let goal_id = client.add_care_goal(
+        &plan_id,
+        &provider,
+        &String::from_str(&env, "Reduce HbA1c below 7%"),
+        &Some(String::from_str(&env, "6.9")),
+        &2_000_000u64,
+        &Symbol::new(&env, "high"),
+    );
 
     assert_eq!(goal_id, 1);
 }
@@ -242,31 +230,27 @@ fn test_add_intervention_success() {
         let mut goals = Vec::new(&env);
         goals.push_back(String::from_str(&env, "Goal"));
 
-        let plan_id = client
-            .create_care_plan(
-                &patient,
-                &provider,
-                &Symbol::new(&env, "chronic_disease"),
-                &conditions,
-                &goals,
-                &1_000_000u64,
-                &30u32,
-            )
-            ;
+        let plan_id = client.create_care_plan(
+            &patient,
+            &provider,
+            &Symbol::new(&env, "chronic_disease"),
+            &conditions,
+            &goals,
+            &1_000_000u64,
+            &30u32,
+        );
 
         (env, provider, client, plan_id)
     };
 
-    let intervention_id = client
-        .add_intervention(
-            &plan_id,
-            &provider,
-            &Symbol::new(&env, "medication"),
-            &String::from_str(&env, "Metformin 500mg"),
-            &String::from_str(&env, "Twice daily"),
-            &Symbol::new(&env, "patient"),
-        )
-        ;
+    let intervention_id = client.add_intervention(
+        &plan_id,
+        &provider,
+        &Symbol::new(&env, "medication"),
+        &String::from_str(&env, "Metformin 500mg"),
+        &String::from_str(&env, "Twice daily"),
+        &Symbol::new(&env, "patient"),
+    );
 
     assert_eq!(intervention_id, 1);
 }
@@ -304,38 +288,32 @@ fn test_record_goal_progress_success() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
-    let goal_id = client
-        .add_care_goal(
-            &plan_id,
-            &provider,
-            &String::from_str(&env, "Reduce HbA1c"),
-            &Some(String::from_str(&env, "7.0")),
-            &2_000_000u64,
-            &Symbol::new(&env, "high"),
-        )
-        ;
+    let goal_id = client.add_care_goal(
+        &plan_id,
+        &provider,
+        &String::from_str(&env, "Reduce HbA1c"),
+        &Some(String::from_str(&env, "7.0")),
+        &2_000_000u64,
+        &Symbol::new(&env, "high"),
+    );
 
-    client
-        .record_goal_progress(
-            &goal_id,
-            &patient,
-            &String::from_str(&env, "7.5"),
-            &String::from_str(&env, "Progress noted"),
-            &1_100_000u64,
-        )
-        ;
+    client.record_goal_progress(
+        &goal_id,
+        &patient,
+        &String::from_str(&env, "7.5"),
+        &String::from_str(&env, "Progress noted"),
+        &1_100_000u64,
+    );
 }
 
 #[test]
@@ -366,37 +344,31 @@ fn test_record_goal_progress_on_achieved_goal_fails() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
-    let goal_id = client
-        .add_care_goal(
-            &plan_id,
-            &provider,
-            &String::from_str(&env, "Reduce HbA1c"),
-            &None,
-            &2_000_000u64,
-            &Symbol::new(&env, "high"),
-        )
-        ;
+    let goal_id = client.add_care_goal(
+        &plan_id,
+        &provider,
+        &String::from_str(&env, "Reduce HbA1c"),
+        &None,
+        &2_000_000u64,
+        &Symbol::new(&env, "high"),
+    );
 
-    client
-        .mark_goal_achieved(
-            &goal_id,
-            &provider,
-            &1_500_000u64,
-            &String::from_str(&env, "Target met"),
-        )
-        ;
+    client.mark_goal_achieved(
+        &goal_id,
+        &provider,
+        &1_500_000u64,
+        &String::from_str(&env, "Target met"),
+    );
 
     let result = client.try_record_goal_progress(
         &goal_id,
@@ -424,37 +396,31 @@ fn test_mark_goal_achieved_success() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
-    let goal_id = client
-        .add_care_goal(
-            &plan_id,
-            &provider,
-            &String::from_str(&env, "Target HbA1c"),
-            &None,
-            &2_000_000u64,
-            &Symbol::new(&env, "high"),
-        )
-        ;
+    let goal_id = client.add_care_goal(
+        &plan_id,
+        &provider,
+        &String::from_str(&env, "Target HbA1c"),
+        &None,
+        &2_000_000u64,
+        &Symbol::new(&env, "high"),
+    );
 
-    client
-        .mark_goal_achieved(
-            &goal_id,
-            &provider,
-            &1_500_000u64,
-            &String::from_str(&env, "Patient reached target"),
-        )
-        ;
+    client.mark_goal_achieved(
+        &goal_id,
+        &provider,
+        &1_500_000u64,
+        &String::from_str(&env, "Patient reached target"),
+    );
 }
 
 #[test]
@@ -468,37 +434,31 @@ fn test_mark_goal_achieved_twice_fails() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
-    let goal_id = client
-        .add_care_goal(
-            &plan_id,
-            &provider,
-            &String::from_str(&env, "Target HbA1c"),
-            &None,
-            &2_000_000u64,
-            &Symbol::new(&env, "high"),
-        )
-        ;
+    let goal_id = client.add_care_goal(
+        &plan_id,
+        &provider,
+        &String::from_str(&env, "Target HbA1c"),
+        &None,
+        &2_000_000u64,
+        &Symbol::new(&env, "high"),
+    );
 
-    client
-        .mark_goal_achieved(
-            &goal_id,
-            &provider,
-            &1_500_000u64,
-            &String::from_str(&env, "Done"),
-        )
-        ;
+    client.mark_goal_achieved(
+        &goal_id,
+        &provider,
+        &1_500_000u64,
+        &String::from_str(&env, "Done"),
+    );
 
     let result = client.try_mark_goal_achieved(
         &goal_id,
@@ -525,27 +485,23 @@ fn test_add_barrier_success() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
-    let barrier_id = client
-        .add_barrier(
-            &plan_id,
-            &patient,
-            &Symbol::new(&env, "financial"),
-            &String::from_str(&env, "Cannot afford medication"),
-            &1_050_000u64,
-        )
-        ;
+    let barrier_id = client.add_barrier(
+        &plan_id,
+        &patient,
+        &Symbol::new(&env, "financial"),
+        &String::from_str(&env, "Cannot afford medication"),
+        &1_050_000u64,
+    );
 
     assert_eq!(barrier_id, 1);
 }
@@ -561,36 +517,30 @@ fn test_resolve_barrier_success() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
-    let barrier_id = client
-        .add_barrier(
-            &plan_id,
-            &patient,
-            &Symbol::new(&env, "financial"),
-            &String::from_str(&env, "Cannot afford medication"),
-            &1_050_000u64,
-        )
-        ;
+    let barrier_id = client.add_barrier(
+        &plan_id,
+        &patient,
+        &Symbol::new(&env, "financial"),
+        &String::from_str(&env, "Cannot afford medication"),
+        &1_050_000u64,
+    );
 
-    client
-        .resolve_barrier(
-            &barrier_id,
-            &provider,
-            &String::from_str(&env, "Enrolled in assistance program"),
-            &1_100_000u64,
-        )
-        ;
+    client.resolve_barrier(
+        &barrier_id,
+        &provider,
+        &String::from_str(&env, "Enrolled in assistance program"),
+        &1_100_000u64,
+    );
 }
 
 #[test]
@@ -604,36 +554,30 @@ fn test_resolve_barrier_twice_fails() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
-    let barrier_id = client
-        .add_barrier(
-            &plan_id,
-            &patient,
-            &Symbol::new(&env, "financial"),
-            &String::from_str(&env, "Cannot afford medication"),
-            &1_050_000u64,
-        )
-        ;
+    let barrier_id = client.add_barrier(
+        &plan_id,
+        &patient,
+        &Symbol::new(&env, "financial"),
+        &String::from_str(&env, "Cannot afford medication"),
+        &1_050_000u64,
+    );
 
-    client
-        .resolve_barrier(
-            &barrier_id,
-            &provider,
-            &String::from_str(&env, "Resolved"),
-            &1_100_000u64,
-        )
-        ;
+    client.resolve_barrier(
+        &barrier_id,
+        &provider,
+        &String::from_str(&env, "Resolved"),
+        &1_100_000u64,
+    );
 
     let result = client.try_resolve_barrier(
         &barrier_id,
@@ -677,26 +621,22 @@ fn test_schedule_review_success() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
-    let review_id = client
-        .schedule_care_plan_review(
-            &plan_id,
-            &provider,
-            &3_600_000u64,
-            &Symbol::new(&env, "routine"),
-        )
-        ;
+    let review_id = client.schedule_care_plan_review(
+        &plan_id,
+        &provider,
+        &3_600_000u64,
+        &Symbol::new(&env, "routine"),
+    );
 
     assert_eq!(review_id, 1);
 }
@@ -712,34 +652,28 @@ fn test_conduct_review_success() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
-    let review_id = client
-        .schedule_care_plan_review(
-            &plan_id,
-            &provider,
-            &3_600_000u64,
-            &Symbol::new(&env, "routine"),
-        )
-        ;
+    let review_id = client.schedule_care_plan_review(
+        &plan_id,
+        &provider,
+        &3_600_000u64,
+        &Symbol::new(&env, "routine"),
+    );
 
     let hash = BytesN::from_array(&env, &[1u8; 32]);
     let mut mods = Vec::new(&env);
     mods.push_back(String::from_str(&env, "Increase exercise frequency"));
 
-    client
-        .conduct_care_plan_review(&review_id, &provider, &hash, &mods, &true)
-        ;
+    client.conduct_care_plan_review(&review_id, &provider, &hash, &mods, &true);
 }
 
 #[test]
@@ -753,36 +687,29 @@ fn test_conduct_review_twice_fails() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
-    let review_id = client
-        .schedule_care_plan_review(
-            &plan_id,
-            &provider,
-            &3_600_000u64,
-            &Symbol::new(&env, "routine"),
-        )
-        ;
+    let review_id = client.schedule_care_plan_review(
+        &plan_id,
+        &provider,
+        &3_600_000u64,
+        &Symbol::new(&env, "routine"),
+    );
 
     let hash = BytesN::from_array(&env, &[1u8; 32]);
     let mods = Vec::new(&env);
 
-    client
-        .conduct_care_plan_review(&review_id, &provider, &hash, &mods, &true)
-        ;
+    client.conduct_care_plan_review(&review_id, &provider, &hash, &mods, &true);
 
-    let result =
-        client.try_conduct_care_plan_review(&review_id, &provider, &hash, &mods, &true);
+    let result = client.try_conduct_care_plan_review(&review_id, &provider, &hash, &mods, &true);
 
     assert!(result.is_err());
 }
@@ -800,33 +727,27 @@ fn test_conduct_review_updates_plan_dates() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
-    let review_id = client
-        .schedule_care_plan_review(
-            &plan_id,
-            &provider,
-            &5_000_000u64,
-            &Symbol::new(&env, "routine"),
-        )
-        ;
+    let review_id = client.schedule_care_plan_review(
+        &plan_id,
+        &provider,
+        &5_000_000u64,
+        &Symbol::new(&env, "routine"),
+    );
 
     let hash = BytesN::from_array(&env, &[2u8; 32]);
     let mods = Vec::new(&env);
 
-    client
-        .conduct_care_plan_review(&review_id, &provider, &hash, &mods, &true)
-        ;
+    client.conduct_care_plan_review(&review_id, &provider, &hash, &mods, &true);
 
     let summary = client.get_care_plan_summary(&plan_id, &provider);
     assert_eq!(summary.last_review_date, Some(5_000_000));
@@ -849,31 +770,27 @@ fn test_assign_care_team_member_success() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
     let specialist = Address::generate(&env);
     let mut responsibilities = Vec::new(&env);
     responsibilities.push_back(String::from_str(&env, "Monitor blood sugar"));
 
-    client
-        .assign_care_team_member(
-            &plan_id,
-            &provider,
-            &specialist,
-            &Symbol::new(&env, "specialist"),
-            &responsibilities,
-        )
-        ;
+    client.assign_care_team_member(
+        &plan_id,
+        &provider,
+        &specialist,
+        &Symbol::new(&env, "specialist"),
+        &responsibilities,
+    );
 
     let summary = client.get_care_plan_summary(&plan_id, &provider);
     assert_eq!(summary.care_team.len(), 1);
@@ -891,17 +808,15 @@ fn test_assign_multiple_team_members() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
     let nurse = Address::generate(&env);
     let dietitian = Address::generate(&env);
@@ -911,25 +826,21 @@ fn test_assign_multiple_team_members() {
     let mut r2 = Vec::new(&env);
     r2.push_back(String::from_str(&env, "Nutrition plan"));
 
-    client
-        .assign_care_team_member(
-            &plan_id,
-            &provider,
-            &nurse,
-            &Symbol::new(&env, "nurse"),
-            &r1,
-        )
-        ;
+    client.assign_care_team_member(
+        &plan_id,
+        &provider,
+        &nurse,
+        &Symbol::new(&env, "nurse"),
+        &r1,
+    );
 
-    client
-        .assign_care_team_member(
-            &plan_id,
-            &provider,
-            &dietitian,
-            &Symbol::new(&env, "dietitian"),
-            &r2,
-        )
-        ;
+    client.assign_care_team_member(
+        &plan_id,
+        &provider,
+        &dietitian,
+        &Symbol::new(&env, "dietitian"),
+        &r2,
+    );
 
     let summary = client.get_care_plan_summary(&plan_id, &provider);
     assert_eq!(summary.care_team.len(), 2);
@@ -960,48 +871,40 @@ fn test_get_care_plan_summary_excludes_achieved_goals() {
     let mut goals = Vec::new(&env);
     goals.push_back(String::from_str(&env, "Goal"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
-    let goal_id = client
-        .add_care_goal(
-            &plan_id,
-            &provider,
-            &String::from_str(&env, "Active goal"),
-            &None,
-            &2_000_000u64,
-            &Symbol::new(&env, "high"),
-        )
-        ;
+    let goal_id = client.add_care_goal(
+        &plan_id,
+        &provider,
+        &String::from_str(&env, "Active goal"),
+        &None,
+        &2_000_000u64,
+        &Symbol::new(&env, "high"),
+    );
 
-    let achieved_goal_id = client
-        .add_care_goal(
-            &plan_id,
-            &provider,
-            &String::from_str(&env, "Achieved goal"),
-            &None,
-            &2_000_000u64,
-            &Symbol::new(&env, "low"),
-        )
-        ;
+    let achieved_goal_id = client.add_care_goal(
+        &plan_id,
+        &provider,
+        &String::from_str(&env, "Achieved goal"),
+        &None,
+        &2_000_000u64,
+        &Symbol::new(&env, "low"),
+    );
 
-    client
-        .mark_goal_achieved(
-            &achieved_goal_id,
-            &provider,
-            &1_500_000u64,
-            &String::from_str(&env, "Done"),
-        )
-        ;
+    client.mark_goal_achieved(
+        &achieved_goal_id,
+        &provider,
+        &1_500_000u64,
+        &String::from_str(&env, "Done"),
+    );
 
     let summary = client.get_care_plan_summary(&plan_id, &provider);
     assert_eq!(summary.active_goals.len(), 1);
@@ -1026,117 +929,97 @@ fn test_full_care_plan_workflow() {
     let mut initial_goals = Vec::new(&env);
     initial_goals.push_back(String::from_str(&env, "Reduce HbA1c"));
 
-    let plan_id = client
-        .create_care_plan(
-            &patient,
-            &provider,
-            &Symbol::new(&env, "chronic_disease"),
-            &conditions,
-            &initial_goals,
-            &1_000_000u64,
-            &30u32,
-        )
-        ;
+    let plan_id = client.create_care_plan(
+        &patient,
+        &provider,
+        &Symbol::new(&env, "chronic_disease"),
+        &conditions,
+        &initial_goals,
+        &1_000_000u64,
+        &30u32,
+    );
 
     // 2. Add goals
-    let goal_id = client
-        .add_care_goal(
-            &plan_id,
-            &provider,
-            &String::from_str(&env, "HbA1c below 7%"),
-            &Some(String::from_str(&env, "6.9")),
-            &3_000_000u64,
-            &Symbol::new(&env, "high"),
-        )
-        ;
+    let goal_id = client.add_care_goal(
+        &plan_id,
+        &provider,
+        &String::from_str(&env, "HbA1c below 7%"),
+        &Some(String::from_str(&env, "6.9")),
+        &3_000_000u64,
+        &Symbol::new(&env, "high"),
+    );
 
     // 3. Add intervention
-    client
-        .add_intervention(
-            &plan_id,
-            &provider,
-            &Symbol::new(&env, "medication"),
-            &String::from_str(&env, "Metformin"),
-            &String::from_str(&env, "Twice daily"),
-            &Symbol::new(&env, "patient"),
-        )
-        ;
+    client.add_intervention(
+        &plan_id,
+        &provider,
+        &Symbol::new(&env, "medication"),
+        &String::from_str(&env, "Metformin"),
+        &String::from_str(&env, "Twice daily"),
+        &Symbol::new(&env, "patient"),
+    );
 
     // 4. Add barrier
-    let barrier_id = client
-        .add_barrier(
-            &plan_id,
-            &patient,
-            &Symbol::new(&env, "financial"),
-            &String::from_str(&env, "Cannot afford test strips"),
-            &1_100_000u64,
-        )
-        ;
+    let barrier_id = client.add_barrier(
+        &plan_id,
+        &patient,
+        &Symbol::new(&env, "financial"),
+        &String::from_str(&env, "Cannot afford test strips"),
+        &1_100_000u64,
+    );
 
     // 5. Record progress
-    client
-        .record_goal_progress(
-            &goal_id,
-            &patient,
-            &String::from_str(&env, "7.8"),
-            &String::from_str(&env, "Improving"),
-            &1_200_000u64,
-        )
-        ;
+    client.record_goal_progress(
+        &goal_id,
+        &patient,
+        &String::from_str(&env, "7.8"),
+        &String::from_str(&env, "Improving"),
+        &1_200_000u64,
+    );
 
     // 6. Assign team member
     let nurse = Address::generate(&env);
     let mut responsibilities = Vec::new(&env);
     responsibilities.push_back(String::from_str(&env, "Check vitals"));
 
-    client
-        .assign_care_team_member(
-            &plan_id,
-            &provider,
-            &nurse,
-            &Symbol::new(&env, "nurse"),
-            &responsibilities,
-        )
-        ;
+    client.assign_care_team_member(
+        &plan_id,
+        &provider,
+        &nurse,
+        &Symbol::new(&env, "nurse"),
+        &responsibilities,
+    );
 
     // 7. Resolve barrier
-    client
-        .resolve_barrier(
-            &barrier_id,
-            &provider,
-            &String::from_str(&env, "Patient enrolled in assistance program"),
-            &1_300_000u64,
-        )
-        ;
+    client.resolve_barrier(
+        &barrier_id,
+        &provider,
+        &String::from_str(&env, "Patient enrolled in assistance program"),
+        &1_300_000u64,
+    );
 
     // 8. Schedule review
-    let review_id = client
-        .schedule_care_plan_review(
-            &plan_id,
-            &provider,
-            &3_592_000u64,
-            &Symbol::new(&env, "routine"),
-        )
-        ;
+    let review_id = client.schedule_care_plan_review(
+        &plan_id,
+        &provider,
+        &3_592_000u64,
+        &Symbol::new(&env, "routine"),
+    );
 
     // 9. Conduct review
     let hash = BytesN::from_array(&env, &[9u8; 32]);
     let mut mods = Vec::new(&env);
     mods.push_back(String::from_str(&env, "Increase Metformin to 1000mg"));
 
-    client
-        .conduct_care_plan_review(&review_id, &provider, &hash, &mods, &true)
-        ;
+    client.conduct_care_plan_review(&review_id, &provider, &hash, &mods, &true);
 
     // 10. Mark goal achieved
-    client
-        .mark_goal_achieved(
-            &goal_id,
-            &provider,
-            &2_500_000u64,
-            &String::from_str(&env, "Patient reached HbA1c target"),
-        )
-        ;
+    client.mark_goal_achieved(
+        &goal_id,
+        &provider,
+        &2_500_000u64,
+        &String::from_str(&env, "Patient reached HbA1c target"),
+    );
 
     // 11. Verify summary
     let summary = client.get_care_plan_summary(&plan_id, &provider);

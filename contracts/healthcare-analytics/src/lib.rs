@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(deprecated)]
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
@@ -233,9 +234,10 @@ impl HealthcareAnalytics {
             .get(&DataKey::QualityMetricsByProvider(provider_id.clone()))
             .unwrap_or(Vec::new(&env));
         ids.push_back(id);
-        env.storage()
-            .persistent()
-            .set(&DataKey::QualityMetricsByProvider(provider_id.clone()), &ids);
+        env.storage().persistent().set(
+            &DataKey::QualityMetricsByProvider(provider_id.clone()),
+            &ids,
+        );
 
         env.events()
             .publish((symbol_short!("rec_qm"), provider_id), metric_name);

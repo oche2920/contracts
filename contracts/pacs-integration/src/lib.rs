@@ -1,4 +1,6 @@
 #![no_std]
+#![allow(deprecated)]
+#![allow(clippy::too_many_arguments)]
 
 mod storage;
 mod types;
@@ -34,7 +36,7 @@ impl PacsContract {
     ) -> Result<u64, Error> {
         ordering_provider.require_auth();
 
-        if study_uid.len() == 0 || body_part.len() == 0 {
+        if study_uid.is_empty() || body_part.is_empty() {
             return Err(Error::InvalidInput);
         }
 
@@ -84,7 +86,7 @@ impl PacsContract {
         let mut study = load_study(&env, study_id).ok_or(Error::NotFound)?;
         study.ordering_provider.require_auth();
 
-        if series_uid.len() == 0 {
+        if series_uid.is_empty() {
             return Err(Error::InvalidInput);
         }
 
@@ -189,10 +191,8 @@ impl PacsContract {
             }
         }
 
-        env.events().publish(
-            (symbol_short!("cmp_req"), current_study_id),
-            radiologist_id,
-        );
+        env.events()
+            .publish((symbol_short!("cmp_req"), current_study_id), radiologist_id);
 
         Ok(matches)
     }
@@ -243,7 +243,7 @@ impl PacsContract {
     ) -> Result<u64, Error> {
         requesting_provider.require_auth();
 
-        if study_ids.len() == 0 || cd_token.len() == 0 {
+        if study_ids.is_empty() || cd_token.is_empty() {
             return Err(Error::InvalidInput);
         }
 
@@ -288,7 +288,7 @@ impl PacsContract {
         // study must exist
         load_study(&env, study_id).ok_or(Error::NotFound)?;
 
-        if purpose.len() == 0 {
+        if purpose.is_empty() {
             return Err(Error::InvalidInput);
         }
 
@@ -353,8 +353,7 @@ impl PacsContract {
 
         let study = load_study(&env, study_id).ok_or(Error::NotFound)?;
 
-        let is_owner =
-            study.patient_id == viewer_id || study.ordering_provider == viewer_id;
+        let is_owner = study.patient_id == viewer_id || study.ordering_provider == viewer_id;
 
         if !is_owner {
             let now = env.ledger().timestamp();

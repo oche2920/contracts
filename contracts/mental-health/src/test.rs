@@ -33,11 +33,16 @@ fn test_conduct_assessment_and_record_scores() {
     // Record PHQ9
     client.record_phq9_score(&assessment_id, &15, &vec![&env, 3, 3, 3, 3, 3], &1690000000);
     // Record GAD7
-    client.record_gad7_score(&assessment_id, &12, &vec![&env, 2, 2, 2, 2, 2, 2], &1690000000);
+    client.record_gad7_score(
+        &assessment_id,
+        &12,
+        &vec![&env, 2, 2, 2, 2, 2, 2],
+        &1690000000,
+    );
 
     let risk_factors = vec![&env, String::from_str(&env, "isolation")];
     let protective_factors = vec![&env, String::from_str(&env, "family")];
-    
+
     client.assess_suicide_risk(
         &assessment_id,
         &provider_id,
@@ -118,11 +123,7 @@ fn test_privacy_and_screening() {
     let provider_id = Address::generate(&env);
 
     // Set privacy flag for substance abuse
-    client.set_enhanced_privacy_flag(
-        &patient_id,
-        &Symbol::new(&env, "substance_abuse"),
-        &true,
-    );
+    client.set_enhanced_privacy_flag(&patient_id, &Symbol::new(&env, "substance_abuse"), &true);
 
     // Request screening should fail due to privacy flag
     let result = client.try_request_substance_screening(
@@ -135,11 +136,7 @@ fn test_privacy_and_screening() {
     assert_eq!(result.is_err(), true);
 
     // Remove privacy flag
-    client.set_enhanced_privacy_flag(
-        &patient_id,
-        &Symbol::new(&env, "substance_abuse"),
-        &false,
-    );
+    client.set_enhanced_privacy_flag(&patient_id, &Symbol::new(&env, "substance_abuse"), &false);
 
     // Request screening should succeed
     let result2 = client.request_substance_screening(
@@ -204,12 +201,8 @@ fn test_invalid_privacy_flag_auth() {
     let client = MentalHealthContractClient::new(&env, &contract_id);
 
     let patient_id = Address::generate(&env);
-    
-    client.set_enhanced_privacy_flag(
-        &patient_id,
-        &Symbol::new(&env, "substance_abuse"),
-        &true,
-    );
+
+    client.set_enhanced_privacy_flag(&patient_id, &Symbol::new(&env, "substance_abuse"), &true);
 }
 
 #[test]

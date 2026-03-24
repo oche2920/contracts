@@ -1,5 +1,3 @@
-#![no_std]
-
 use soroban_sdk::{contracterror, contracttype, Address, BytesN, String, Symbol, Vec};
 
 #[contracttype]
@@ -107,21 +105,21 @@ pub struct OrthoAdjustment {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
     ChartCount,
-    Chart(u64),                     // chart_id
-    ToothCond(u64, String),         // chart_id, tooth_number
-    Perio(u64, String, Symbol),     // chart_id, tooth_number, site
+    Chart(u64),                 // chart_id
+    ToothCond(u64, String),     // chart_id, tooth_number
+    Perio(u64, String, Symbol), // chart_id, tooth_number, site
     PlanCount,
-    Plan(u64),                      // treatment_plan_id
+    Plan(u64), // treatment_plan_id
     AppointmentCount,
-    Appt(u64),                      // appointment_id
-    ProcedureLog(u64),              // appointment_id -> log
+    Appt(u64),         // appointment_id
+    ProcedureLog(u64), // appointment_id -> log
     RadiographCount,
-    Radio(u64),                     // radiograph_id
+    Radio(u64), // radiograph_id
     OrthoCount,
-    Ortho(u64),                     // ortho_treatment_id
-    OrthoAdj(u64, u64),             // ortho_treatment_id, adjustment_date
+    Ortho(u64),         // ortho_treatment_id
+    OrthoAdj(u64, u64), // ortho_treatment_id, adjustment_date
     RxCount,
-    Rx(u64),                        // rx_id
+    Rx(u64), // rx_id
     Consent(BytesN<32>),
 }
 

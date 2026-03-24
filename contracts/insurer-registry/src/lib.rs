@@ -1,11 +1,11 @@
 #![no_std]
+#![allow(deprecated)]
 
 use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String, Vec};
 
 /// --------------------
 /// Insurer Structures
 /// --------------------
-
 /// Represents insurance company information stored on-chain
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]

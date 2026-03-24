@@ -1,6 +1,4 @@
-#![no_std]
-
-use soroban_sdk::{contracterror, contracttype, Address, String, BytesN, Vec};
+use soroban_sdk::{contracterror, contracttype, Address, BytesN, String, Vec};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -63,11 +61,11 @@ pub struct ClaimRecord {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
     ClaimCounter,
-    Claim(u64), // claim_id -> ClaimRecord
-    DenialInfos(u64), // claim_id -> Vec<DenialInfo>
-    ApprovedLines(u64), // claim_id -> Vec<u64>
+    Claim(u64),              // claim_id -> ClaimRecord
+    DenialInfos(u64),        // claim_id -> Vec<DenialInfo>
+    ApprovedLines(u64),      // claim_id -> Vec<u64>
     ProviderClaims(Address), // provider_id -> Vec<u64>
     PatientClaims(Address),  // patient_id -> Vec<u64>
-    ClaimPayment(u64), // claim_id -> (u64, String) // payment_date, payment_reference
-    PatientPayment(u64), // claim_id -> (u64, i128) // payment_date, payment_amount
+    ClaimPayment(u64),       // claim_id -> (u64, String) // payment_date, payment_reference
+    PatientPayment(u64),     // claim_id -> (u64, i128) // payment_date, payment_amount
 }

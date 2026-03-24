@@ -1,16 +1,17 @@
 #![no_std]
+#![allow(deprecated)]
 
 use soroban_sdk::{
-    contract, contractimpl, contracterror, contractevent, symbol_short, Address, Env, String,
+    contract, contracterror, contractevent, contractimpl, symbol_short, Address, Env, String,
     Symbol, Vec,
 };
 
-mod types;
 mod storage;
+mod types;
 mod validation;
 
-pub use types::*;
 pub use storage::*;
+pub use types::*;
 
 /// Events for allergy management operations
 #[contractevent]
@@ -66,13 +67,15 @@ impl AllergyManagement {
     /// Initialize the contract with an admin address
     pub fn initialize(env: Env, admin: Address) {
         admin.require_auth();
-        
+
         if env.storage().instance().has(&DataKey::Admin) {
             panic!("Contract already initialized");
         }
-        
+
         env.storage().instance().set(&DataKey::Admin, &admin);
-        env.storage().instance().set(&DataKey::AllergyCounter, &0u64);
+        env.storage()
+            .instance()
+            .set(&DataKey::AllergyCounter, &0u64);
     }
 
     /// Record a new allergy for a patient
@@ -89,7 +92,12 @@ impl AllergyManagement {
         validation::validate_severity(&request.severity)?;
 
         // Check for duplicate allergy
-        if storage::check_duplicate_allergy(&env, &patient_id, &request.allergen, &request.allergen_type) {
+        if storage::check_duplicate_allergy(
+            &env,
+            &patient_id,
+            &request.allergen,
+            &request.allergen_type,
+        ) {
             return Err(Error::DuplicateAllergy);
         }
 
@@ -233,14 +241,21 @@ impl AllergyManagement {
                     if allergy.allergen_type == symbol_short!("med") {
                         // Direct match or cross-sensitivity check
                         if validation::check_drug_match(&allergy.allergen, &drug_name)
-                            || validation::check_cross_sensitivity(&env, &allergy.allergen, &drug_name)
+                            || validation::check_cross_sensitivity(
+                                &env,
+                                &allergy.allergen,
+                                &drug_name,
+                            )
                         {
                             let interaction = AllergyInteraction {
                                 allergy_id: allergy.allergy_id,
                                 allergen: allergy.allergen.clone(),
                                 severity: allergy.severity.clone(),
                                 reaction_type: allergy.reaction_type.clone(),
-                                interaction_type: if validation::check_drug_match(&allergy.allergen, &drug_name) {
+                                interaction_type: if validation::check_drug_match(
+                                    &allergy.allergen,
+                                    &drug_name,
+                                ) {
                                     symbol_short!("direct")
                                 } else {
                                     symbol_short!("cross")

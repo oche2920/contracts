@@ -92,7 +92,7 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
                 },
                 {
-                  "bytes": "010203"
+                  "bytes": "620101010101010101010101010101010101010101010101010101010101010101010101"
                 },
                 {
                   "string": "Blood test results"
@@ -317,7 +317,7 @@
                             "symbol": "record_hash"
                           },
                           "val": {
-                            "bytes": "010203"
+                            "bytes": "620101010101010101010101010101010101010101010101010101010101010101010101"
                           }
                         },
                         {

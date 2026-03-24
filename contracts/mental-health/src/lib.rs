@@ -1,7 +1,9 @@
 #![no_std]
+#![allow(clippy::too_many_arguments)]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, vec, Address, BytesN, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, vec, Address, BytesN, Env, String, Symbol,
+    Vec,
 };
 
 #[contracterror]
@@ -148,7 +150,11 @@ impl MentalHealthContract {
     ) -> Result<u64, Error> {
         provider_id.require_auth();
 
-        let mut count: u64 = env.storage().instance().get(&DataKey::AssessmentCounter).unwrap_or(0);
+        let mut count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::AssessmentCounter)
+            .unwrap_or(0);
         count += 1;
 
         let assessment = MentalHealthAssessment {
@@ -162,8 +168,12 @@ impl MentalHealthContract {
             diagnosis_codes: vec![&env],
         };
 
-        env.storage().persistent().set(&DataKey::Assessment(count), &assessment);
-        env.storage().instance().set(&DataKey::AssessmentCounter, &count);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Assessment(count), &assessment);
+        env.storage()
+            .instance()
+            .set(&DataKey::AssessmentCounter, &count);
 
         Ok(count)
     }
@@ -182,7 +192,9 @@ impl MentalHealthContract {
             .ok_or(Error::NotFound)?;
 
         assessment.phq9_score = Some(total_score);
-        env.storage().persistent().set(&DataKey::Assessment(assessment_id), &assessment);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Assessment(assessment_id), &assessment);
 
         Ok(())
     }
@@ -201,7 +213,9 @@ impl MentalHealthContract {
             .ok_or(Error::NotFound)?;
 
         assessment.gad7_score = Some(total_score);
-        env.storage().persistent().set(&DataKey::Assessment(assessment_id), &assessment);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Assessment(assessment_id), &assessment);
 
         Ok(())
     }
@@ -224,7 +238,9 @@ impl MentalHealthContract {
             .ok_or(Error::NotFound)?;
 
         assessment.suicide_risk_level = Some(risk_level);
-        env.storage().persistent().set(&DataKey::Assessment(assessment_id), &assessment);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Assessment(assessment_id), &assessment);
 
         Ok(())
     }
@@ -241,7 +257,11 @@ impl MentalHealthContract {
     ) -> Result<u64, Error> {
         provider_id.require_auth();
 
-        let mut count: u64 = env.storage().instance().get(&DataKey::PlanCounter).unwrap_or(0);
+        let mut count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PlanCounter)
+            .unwrap_or(0);
         count += 1;
 
         let plan = SafetyPlan {
@@ -255,7 +275,9 @@ impl MentalHealthContract {
             plan_hash,
         };
 
-        env.storage().persistent().set(&DataKey::SafetyPlan(count), &plan);
+        env.storage()
+            .persistent()
+            .set(&DataKey::SafetyPlan(count), &plan);
         env.storage().instance().set(&DataKey::PlanCounter, &count);
 
         Ok(count)
@@ -273,7 +295,11 @@ impl MentalHealthContract {
     ) -> Result<u64, Error> {
         provider_id.require_auth();
 
-        let mut count: u64 = env.storage().instance().get(&DataKey::PlanCounter).unwrap_or(0);
+        let mut count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PlanCounter)
+            .unwrap_or(0);
         count += 1;
 
         let plan = TreatmentPlan {
@@ -287,7 +313,9 @@ impl MentalHealthContract {
             review_date,
         };
 
-        env.storage().persistent().set(&DataKey::TreatmentPlan(count), &plan);
+        env.storage()
+            .persistent()
+            .set(&DataKey::TreatmentPlan(count), &plan);
         env.storage().instance().set(&DataKey::PlanCounter, &count);
 
         Ok(count)
@@ -313,7 +341,9 @@ impl MentalHealthContract {
             homework_assigned,
         };
 
-        env.storage().persistent().set(&DataKey::Session(treatment_plan_id, session_date), &session);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Session(treatment_plan_id, session_date), &session);
 
         Ok(())
     }
@@ -334,7 +364,10 @@ impl MentalHealthContract {
             measurement_tool,
         };
 
-        env.storage().persistent().set(&DataKey::Symptom(patient_id, symptom_type, measurement_date), &symp);
+        env.storage().persistent().set(
+            &DataKey::Symptom(patient_id, symptom_type, measurement_date),
+            &symp,
+        );
 
         Ok(())
     }
@@ -348,7 +381,11 @@ impl MentalHealthContract {
         facility_id: Address,
         discharge_date: Option<u64>,
     ) -> Result<u64, Error> {
-        let mut count: u64 = env.storage().instance().get(&DataKey::HospitalizationCounter).unwrap_or(0);
+        let mut count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::HospitalizationCounter)
+            .unwrap_or(0);
         count += 1;
 
         let hosp = Hospitalization {
@@ -361,8 +398,12 @@ impl MentalHealthContract {
             discharge_date,
         };
 
-        env.storage().persistent().set(&DataKey::Hospitalization(count), &hosp);
-        env.storage().instance().set(&DataKey::HospitalizationCounter, &count);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Hospitalization(count), &hosp);
+        env.storage()
+            .instance()
+            .set(&DataKey::HospitalizationCounter, &count);
 
         Ok(count)
     }
@@ -379,14 +420,21 @@ impl MentalHealthContract {
         let is_private = env
             .storage()
             .persistent()
-            .get(&DataKey::PrivacyFlag(patient_id.clone(), Symbol::new(&env, "substance_abuse")))
+            .get(&DataKey::PrivacyFlag(
+                patient_id.clone(),
+                Symbol::new(&env, "substance_abuse"),
+            ))
             .unwrap_or(false);
 
         if is_private {
             return Err(Error::RequiresExplicitConsent);
         }
 
-        let mut count: u64 = env.storage().instance().get(&DataKey::ScreeningCounter).unwrap_or(0);
+        let mut count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ScreeningCounter)
+            .unwrap_or(0);
         count += 1;
 
         let screen = Screening {
@@ -397,8 +445,12 @@ impl MentalHealthContract {
             screening_date,
         };
 
-        env.storage().persistent().set(&DataKey::Screening(count), &screen);
-        env.storage().instance().set(&DataKey::ScreeningCounter, &count);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Screening(count), &screen);
+        env.storage()
+            .instance()
+            .set(&DataKey::ScreeningCounter, &count);
 
         Ok(count)
     }
@@ -410,7 +462,10 @@ impl MentalHealthContract {
         outcome_measures: Vec<OutcomeMeasure>,
         _functional_improvement: bool,
     ) -> Result<(), Error> {
-        env.storage().persistent().set(&DataKey::Outcomes(treatment_plan_id, measurement_date), &outcome_measures);
+        env.storage().persistent().set(
+            &DataKey::Outcomes(treatment_plan_id, measurement_date),
+            &outcome_measures,
+        );
         Ok(())
     }
 
@@ -421,7 +476,10 @@ impl MentalHealthContract {
         requires_explicit_consent: bool,
     ) -> Result<(), Error> {
         patient_id.require_auth();
-        env.storage().persistent().set(&DataKey::PrivacyFlag(patient_id, record_type), &requires_explicit_consent);
+        env.storage().persistent().set(
+            &DataKey::PrivacyFlag(patient_id, record_type),
+            &requires_explicit_consent,
+        );
         Ok(())
     }
 }

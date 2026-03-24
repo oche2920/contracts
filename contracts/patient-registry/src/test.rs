@@ -6,6 +6,23 @@ use soroban_sdk::{
     Address, Bytes, BytesN, Env, IntoVal, String, Symbol,
 };
 
+fn make_cid_v1(env: &Env, seed: u8) -> Bytes {
+    let mut raw = [seed; 36];
+    raw[0] = b'b';
+    Bytes::from_array(env, &raw)
+}
+
+fn make_cid_v0(env: &Env, seed: u8) -> Bytes {
+    let mut raw = [seed; 34];
+    raw[0] = 0x12;
+    raw[1] = 0x20;
+    Bytes::from_array(env, &raw)
+}
+
+fn make_cid_v0_qm(env: &Env) -> Bytes {
+    Bytes::from_slice(env, b"QmXoypizj2Madv6NthR75ce451F33968F9e1XF3D8xS288")
+}
+
 /// ------------------------------------------------
 /// PATIENT TESTS
 /// ------------------------------------------------
@@ -219,7 +236,7 @@ fn test_grant_access_and_add_medical_record() {
     let patient = Address::generate(&env);
     let doctor = Address::generate(&env);
 
-    let hash = Bytes::from_array(&env, &[1, 2, 3]);
+    let hash = make_cid_v1(&env, 1);
     let desc = String::from_str(&env, "Blood test results");
     let v1 = BytesN::from_array(&env, &[1u8; 32]);
 
@@ -231,13 +248,7 @@ fn test_grant_access_and_add_medical_record() {
     client.publish_consent_version(&v1);
     client.acknowledge_consent(&patient, &patient, &v1);
     client.grant_access(&patient, &patient, &doctor);
-    client.add_medical_record(
-        &patient,
-        &doctor,
-        &hash,
-        &desc,
-        &Symbol::new(&env, "LAB"),
-    );
+    client.add_medical_record(&patient, &doctor, &hash, &desc, &Symbol::new(&env, "LAB"));
 
     let records = client.get_medical_records(&patient);
     assert_eq!(records.len(), 1);
@@ -258,7 +269,7 @@ fn test_unauthorized_doctor_cannot_add_record() {
     let patient = Address::generate(&env);
     let doctor = Address::generate(&env);
 
-    let hash = Bytes::from_array(&env, &[9, 9, 9]);
+    let hash = make_cid_v1(&env, 9);
     let desc = String::from_str(&env, "X-ray scan");
 
     env.mock_all_auths();
@@ -288,6 +299,100 @@ fn test_revoke_access() {
 
     let doctors = client.get_authorized_doctors(&patient);
     assert_eq!(doctors.len(), 0);
+}
+
+#[test]
+fn test_validate_cidv1_base32() {
+    let env = Env::default();
+    let cid = make_cid_v1(&env, 7);
+    assert!(validate_cid(&cid).is_ok());
+}
+
+#[test]
+fn test_validate_cidv0_multihash() {
+    let env = Env::default();
+    let cid = make_cid_v0(&env, 9);
+    assert!(validate_cid(&cid).is_ok());
+}
+
+#[test]
+fn test_validate_cidv0_qm_prefix() {
+    let env = Env::default();
+    let cid = make_cid_v0_qm(&env);
+    assert!(validate_cid(&cid).is_ok());
+}
+
+#[test]
+fn test_validate_empty_cid_rejected() {
+    let env = Env::default();
+    let cid = Bytes::from_slice(&env, &[]);
+    assert_eq!(validate_cid(&cid), Err(ContractError::InvalidCID));
+}
+
+#[test]
+fn test_validate_oversized_cid_rejected() {
+    let env = Env::default();
+    let raw = [b'b'; 513];
+    let cid = Bytes::from_slice(&env, &raw);
+    assert_eq!(validate_cid(&cid), Err(ContractError::InvalidCID));
+}
+
+#[test]
+fn test_validate_short_cidv1_rejected() {
+    let env = Env::default();
+    let raw = [b'b'; 10];
+    let cid = Bytes::from_slice(&env, &raw);
+    assert_eq!(validate_cid(&cid), Err(ContractError::InvalidCID));
+}
+
+#[test]
+fn test_validate_wrong_cidv0_prefix_rejected() {
+    let env = Env::default();
+    let mut raw = [0u8; 34];
+    raw[0] = 0x12;
+    raw[1] = 0x21;
+    let cid = Bytes::from_slice(&env, &raw);
+    assert_eq!(validate_cid(&cid), Err(ContractError::InvalidCID));
+}
+
+#[test]
+fn test_validate_garbage_bytes_rejected() {
+    let env = Env::default();
+    let cid = Bytes::from_slice(&env, &[0xFF, 0xAB, 0x00, 0x11]);
+    assert_eq!(validate_cid(&cid), Err(ContractError::InvalidCID));
+}
+
+#[test]
+fn test_add_medical_record_rejects_invalid_cid() {
+    let env = Env::default();
+    let contract_id = env.register(MedicalRegistry, ());
+    let client = MedicalRegistryClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let patient = Address::generate(&env);
+    let doctor = Address::generate(&env);
+    let treasury = Address::generate(&env);
+    let fee_token = Address::generate(&env);
+    let version = BytesN::from_array(&env, &[1u8; 32]);
+    let invalid_cid = Bytes::from_slice(&env, &[0x01, 0x02, 0x03]);
+
+    env.mock_all_auths();
+
+    client.initialize(&admin, &treasury, &fee_token);
+    client.publish_consent_version(&version);
+    client.acknowledge_consent(&patient, &patient, &version);
+    client.grant_access(&patient, &patient, &doctor);
+
+    let result = client.try_add_medical_record(
+        &patient,
+        &doctor,
+        &invalid_cid,
+        &String::from_str(&env, "Invalid CID"),
+        &Symbol::new(&env, "LAB"),
+    );
+
+    assert!(matches!(result, Err(Ok(ContractError::InvalidCID))));
+    assert_eq!(client.get_medical_records(&patient).len(), 0);
 }
 
 // ------------------------------------------------
@@ -722,7 +827,10 @@ fn test_consent_status_never_signed() {
         &Address::generate(&env),
     );
 
-    assert_eq!(client.get_consent_status(&patient), ConsentStatus::NeverSigned);
+    assert_eq!(
+        client.get_consent_status(&patient),
+        ConsentStatus::NeverSigned
+    );
 }
 
 #[test]
@@ -739,7 +847,10 @@ fn test_consent_status_never_signed_no_ack() {
     client.initialize(&admin, &treasury, &fee_token);
     client.publish_consent_version(&make_version(&env, 1));
 
-    assert_eq!(client.get_consent_status(&patient), ConsentStatus::NeverSigned);
+    assert_eq!(
+        client.get_consent_status(&patient),
+        ConsentStatus::NeverSigned
+    );
 }
 
 #[test]
@@ -758,7 +869,10 @@ fn test_consent_status_acknowledged() {
     client.publish_consent_version(&v1);
     client.acknowledge_consent(&patient, &patient, &v1);
 
-    assert_eq!(client.get_consent_status(&patient), ConsentStatus::Acknowledged);
+    assert_eq!(
+        client.get_consent_status(&patient),
+        ConsentStatus::Acknowledged
+    );
 }
 
 #[test]
@@ -801,7 +915,10 @@ fn test_consent_re_acknowledge_restores_acknowledged() {
     client.publish_consent_version(&v2);
     client.acknowledge_consent(&patient, &patient, &v2);
 
-    assert_eq!(client.get_consent_status(&patient), ConsentStatus::Acknowledged);
+    assert_eq!(
+        client.get_consent_status(&patient),
+        ConsentStatus::Acknowledged
+    );
 }
 
 #[test]
@@ -841,7 +958,7 @@ fn test_add_record_blocked_without_consent() {
     client.add_medical_record(
         &patient,
         &doctor,
-        &Bytes::from_array(&env, &[1, 2, 3]),
+        &make_cid_v1(&env, 1),
         &String::from_str(&env, "test"),
         &Symbol::new(&env, "LAB"),
     );
@@ -867,7 +984,7 @@ fn test_add_record_allowed_after_consent() {
     client.add_medical_record(
         &patient,
         &doctor,
-        &Bytes::from_array(&env, &[1, 2, 3]),
+        &make_cid_v1(&env, 2),
         &String::from_str(&env, "Blood test"),
         &Symbol::new(&env, "LAB"),
     );
@@ -900,7 +1017,7 @@ fn test_add_record_blocked_after_new_version() {
     client.add_medical_record(
         &patient,
         &doctor,
-        &Bytes::from_array(&env, &[1, 2, 3]),
+        &make_cid_v1(&env, 3),
         &String::from_str(&env, "Post-update record"),
         &Symbol::new(&env, "LAB"),
     );
@@ -910,7 +1027,7 @@ fn test_add_record_blocked_after_new_version() {
 /// GUARDIAN TESTS
 /// ------------------------------------------------
 
-fn setup_with_consent(env: &Env) -> (MedicalRegistryClient, Address) {
+fn setup_with_consent(env: &Env) -> (MedicalRegistryClient<'_>, Address) {
     let contract_id = env.register(MedicalRegistry, ());
     let client = MedicalRegistryClient::new(env, &contract_id);
     let admin = Address::generate(env);
@@ -956,7 +1073,10 @@ fn test_guardian_can_acknowledge_consent() {
     client.assign_guardian(&patient, &guardian);
     client.acknowledge_consent(&patient, &guardian, &v1);
 
-    assert_eq!(client.get_consent_status(&patient), ConsentStatus::Acknowledged);
+    assert_eq!(
+        client.get_consent_status(&patient),
+        ConsentStatus::Acknowledged
+    );
 }
 
 #[test]
@@ -992,7 +1112,11 @@ fn test_guardian_can_update_patient() {
         &String::from_str(&env, "ipfs://original"),
     );
     client.assign_guardian(&patient, &guardian);
-    client.update_patient(&patient, &guardian, &String::from_str(&env, "ipfs://updated"));
+    client.update_patient(
+        &patient,
+        &guardian,
+        &String::from_str(&env, "ipfs://updated"),
+    );
 
     assert_eq!(
         client.get_patient(&patient).metadata,
@@ -1015,7 +1139,7 @@ fn test_guardian_enables_record_write() {
     client.add_medical_record(
         &patient,
         &doctor,
-        &Bytes::from_array(&env, &[5, 6, 7]),
+        &make_cid_v1(&env, 5),
         &String::from_str(&env, "Guardian-approved record"),
         &Symbol::new(&env, "PRESCRIPTION"),
     );
@@ -1097,7 +1221,10 @@ fn test_first_snapshot_always_allowed() {
     client.publish_consent_version(&v1);
 
     client.emit_state_snapshot();
-    assert_eq!(client.get_last_snapshot_ledger(), Some(env.ledger().sequence()));
+    assert_eq!(
+        client.get_last_snapshot_ledger(),
+        Some(env.ledger().sequence())
+    );
 }
 
 #[test]
@@ -1217,7 +1344,10 @@ fn test_snapshot_includes_registered_patients_and_doctors() {
     );
 
     client.emit_state_snapshot();
-    assert_eq!(client.get_last_snapshot_ledger(), Some(env.ledger().sequence()));
+    assert_eq!(
+        client.get_last_snapshot_ledger(),
+        Some(env.ledger().sequence())
+    );
 }
 
 /// ------------------------------------------------
@@ -1226,7 +1356,15 @@ fn test_snapshot_includes_registered_patients_and_doctors() {
 
 fn setup_with_fee(
     env: &Env,
-) -> (MedicalRegistryClient, Address, Address, Address, Address, Address, BytesN<32>) {
+) -> (
+    MedicalRegistryClient<'_>,
+    Address,
+    Address,
+    Address,
+    Address,
+    Address,
+    BytesN<32>,
+) {
     let contract_id = env.register(MedicalRegistry, ());
     let client = MedicalRegistryClient::new(env, &contract_id);
 
@@ -1256,16 +1394,14 @@ fn setup_with_fee(
 #[test]
 fn test_get_record_fee_default_zero() {
     let env = Env::default();
-    let (client, _admin, _treasury, _token_id, _doctor, _patient, _v1) =
-        setup_with_fee(&env);
+    let (client, _admin, _treasury, _token_id, _doctor, _patient, _v1) = setup_with_fee(&env);
     assert_eq!(client.get_record_fee(), 0);
 }
 
 #[test]
 fn test_set_and_get_record_fee() {
     let env = Env::default();
-    let (client, _admin, _treasury, _token_id, _doctor, _patient, _v1) =
-        setup_with_fee(&env);
+    let (client, _admin, _treasury, _token_id, _doctor, _patient, _v1) = setup_with_fee(&env);
     client.set_record_fee(&500);
     assert_eq!(client.get_record_fee(), 500);
 }
@@ -1273,13 +1409,12 @@ fn test_set_and_get_record_fee() {
 #[test]
 fn test_add_record_zero_fee_no_transfer() {
     let env = Env::default();
-    let (client, _admin, treasury, token_id, doctor, patient, _v1) =
-        setup_with_fee(&env);
+    let (client, _admin, treasury, token_id, doctor, patient, _v1) = setup_with_fee(&env);
 
     client.add_medical_record(
         &patient,
         &doctor,
-        &Bytes::from_array(&env, &[1, 2, 3]),
+        &make_cid_v1(&env, 7),
         &String::from_str(&env, "Zero fee record"),
         &Symbol::new(&env, "LAB"),
     );
@@ -1292,14 +1427,13 @@ fn test_add_record_zero_fee_no_transfer() {
 #[test]
 fn test_add_record_transfers_fee_to_treasury() {
     let env = Env::default();
-    let (client, _admin, treasury, token_id, doctor, patient, _v1) =
-        setup_with_fee(&env);
+    let (client, _admin, treasury, token_id, doctor, patient, _v1) = setup_with_fee(&env);
 
     client.set_record_fee(&200);
     client.add_medical_record(
         &patient,
         &doctor,
-        &Bytes::from_array(&env, &[4, 5, 6]),
+        &make_cid_v1(&env, 8),
         &String::from_str(&env, "Paid record"),
         &Symbol::new(&env, "LAB"),
     );
@@ -1312,8 +1446,7 @@ fn test_add_record_transfers_fee_to_treasury() {
 #[test]
 fn test_fee_deducted_per_record() {
     let env = Env::default();
-    let (client, _admin, treasury, token_id, doctor, patient, _v1) =
-        setup_with_fee(&env);
+    let (client, _admin, treasury, token_id, doctor, patient, _v1) = setup_with_fee(&env);
 
     client.set_record_fee(&100);
 
@@ -1321,7 +1454,7 @@ fn test_fee_deducted_per_record() {
         client.add_medical_record(
             &patient,
             &doctor,
-            &Bytes::from_array(&env, &[i, i, i]),
+            &make_cid_v1(&env, i),
             &String::from_str(&env, "Record"),
             &Symbol::new(&env, "LAB"),
         );
@@ -1336,16 +1469,14 @@ fn test_fee_deducted_per_record() {
 #[should_panic(expected = "Fee cannot be negative")]
 fn test_set_negative_fee_panics() {
     let env = Env::default();
-    let (client, _admin, _treasury, _token_id, _doctor, _patient, _v1) =
-        setup_with_fee(&env);
+    let (client, _admin, _treasury, _token_id, _doctor, _patient, _v1) = setup_with_fee(&env);
     client.set_record_fee(&-1);
 }
 
 #[test]
 fn test_fee_can_be_reset_to_zero() {
     let env = Env::default();
-    let (client, _admin, treasury, token_id, doctor, patient, _v1) =
-        setup_with_fee(&env);
+    let (client, _admin, treasury, token_id, doctor, patient, _v1) = setup_with_fee(&env);
 
     client.set_record_fee(&300);
     client.set_record_fee(&0);
@@ -1353,7 +1484,7 @@ fn test_fee_can_be_reset_to_zero() {
     client.add_medical_record(
         &patient,
         &doctor,
-        &Bytes::from_array(&env, &[7, 8, 9]),
+        &make_cid_v1(&env, 9),
         &String::from_str(&env, "Free after reset"),
         &Symbol::new(&env, "LAB"),
     );
@@ -1389,9 +1520,7 @@ fn setup_for_ttl(
 /// GET_RECORDS_BY_TYPE TESTS
 /// ------------------------------------------------
 
-fn setup_for_filter(
-    env: &Env,
-) -> (MedicalRegistryClient, Address, Address) {
+fn setup_for_filter(env: &Env) -> (MedicalRegistryClient<'_>, Address, Address) {
     let contract_id = env.register(MedicalRegistry, ());
     let client = MedicalRegistryClient::new(env, &contract_id);
     let admin = Address::generate(env);
@@ -1445,6 +1574,7 @@ fn test_get_records_by_type_returns_matching_records() {
     client.add_medical_record(
         &patient,
         &doctor,
+        &make_cid_v1(&env, 10),
         &Bytes::from_array(&env, &[9, 8, 7]),
         &String::from_str(&env, "Checkup"),
     );
@@ -1469,26 +1599,36 @@ fn test_get_records_extends_ttl() {
     client.add_medical_record(
         &patient,
         &doctor,
-        &Bytes::from_array(&env, &[2, 2, 2]),
+        &make_cid_v1(&env, 11),
         &String::from_str(&env, "Amoxicillin"),
         &Symbol::new(&env, "PRESCRIPTION"),
     );
     client.add_medical_record(
         &patient,
         &doctor,
-        &Bytes::from_array(&env, &[3, 3, 3]),
+        &make_cid_v1(&env, 12),
         &String::from_str(&env, "Lipid panel"),
         &Symbol::new(&env, "LAB"),
     );
 
     let lab_records = client.get_records_by_type(&patient, &patient, &Symbol::new(&env, "LAB"));
     assert_eq!(lab_records.len(), 2);
-    assert_eq!(lab_records.get(0).unwrap().description, String::from_str(&env, "CBC panel"));
-    assert_eq!(lab_records.get(1).unwrap().description, String::from_str(&env, "Lipid panel"));
+    assert_eq!(
+        lab_records.get(0).unwrap().description,
+        String::from_str(&env, "CBC panel")
+    );
+    assert_eq!(
+        lab_records.get(1).unwrap().description,
+        String::from_str(&env, "Lipid panel")
+    );
 
-    let rx_records = client.get_records_by_type(&patient, &patient, &Symbol::new(&env, "PRESCRIPTION"));
+    let rx_records =
+        client.get_records_by_type(&patient, &patient, &Symbol::new(&env, "PRESCRIPTION"));
     assert_eq!(rx_records.len(), 1);
-    assert_eq!(rx_records.get(0).unwrap().description, String::from_str(&env, "Amoxicillin"));
+    assert_eq!(
+        rx_records.get(0).unwrap().description,
+        String::from_str(&env, "Amoxicillin")
+    );
 }
 
 #[test]
@@ -1499,6 +1639,7 @@ fn test_get_records_by_type_returns_empty_when_no_match() {
     client.add_medical_record(
         &patient,
         &doctor,
+        &make_cid_v1(&env, 13),
         &Bytes::from_array(&env, &[1, 2, 3]),
         &String::from_str(&env, "Initial record"),
     );
@@ -1602,7 +1743,7 @@ fn test_get_records_by_type_authorized_doctor_can_read() {
     client.add_medical_record(
         &patient,
         &doctor,
-        &Bytes::from_array(&env, &[9, 8, 7]),
+        &make_cid_v1(&env, 14),
         &String::from_str(&env, "Flu shot"),
         &Symbol::new(&env, "IMMUNIZATION"),
     );
@@ -1622,7 +1763,7 @@ fn test_get_records_by_type_guardian_can_read() {
     client.add_medical_record(
         &patient,
         &doctor,
-        &Bytes::from_array(&env, &[4, 5, 6]),
+        &make_cid_v1(&env, 15),
         &String::from_str(&env, "Child checkup"),
         &Symbol::new(&env, "VISIT"),
     );
@@ -1658,26 +1799,34 @@ fn test_get_records_by_type_multiple_types_isolation() {
         client.add_medical_record(
             &patient,
             &doctor,
-            &Bytes::from_array(&env, &[i as u8, i as u8, i as u8]),
+            &make_cid_v1(&env, i as u8),
             &String::from_str(&env, desc),
             &Symbol::new(&env, rtype),
         );
     }
 
     assert_eq!(
-        client.get_records_by_type(&patient, &patient, &Symbol::new(&env, "LAB")).len(),
+        client
+            .get_records_by_type(&patient, &patient, &Symbol::new(&env, "LAB"))
+            .len(),
         2
     );
     assert_eq!(
-        client.get_records_by_type(&patient, &patient, &Symbol::new(&env, "PRESCRIPTION")).len(),
+        client
+            .get_records_by_type(&patient, &patient, &Symbol::new(&env, "PRESCRIPTION"))
+            .len(),
         2
     );
     assert_eq!(
-        client.get_records_by_type(&patient, &patient, &Symbol::new(&env, "IMAGING")).len(),
+        client
+            .get_records_by_type(&patient, &patient, &Symbol::new(&env, "IMAGING"))
+            .len(),
         1
     );
     assert_eq!(
-        client.get_records_by_type(&patient, &patient, &Symbol::new(&env, "VISIT")).len(),
+        client
+            .get_records_by_type(&patient, &patient, &Symbol::new(&env, "VISIT"))
+            .len(),
         0
     );
 }

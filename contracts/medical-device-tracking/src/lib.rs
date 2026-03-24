@@ -1,7 +1,8 @@
 #![no_std]
+#![allow(clippy::too_many_arguments)]
 
-mod types;
 mod test;
+mod types;
 
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol, Vec};
 use types::{
@@ -144,9 +145,7 @@ impl MedicalDeviceRegistry {
             .get(&DataKey::DmeCounter)
             .unwrap_or(0);
         let new_id = count + 1;
-        env.storage()
-            .instance()
-            .set(&DataKey::DmeCounter, &new_id);
+        env.storage().instance().set(&DataKey::DmeCounter, &new_id);
 
         let prescription = DmePrescription {
             prescription_id: new_id,
@@ -403,10 +402,7 @@ impl MedicalDeviceRegistry {
     }
 
     /// Retrieve all recalls associated with a specific device ID.
-    pub fn check_device_recalls(
-        env: Env,
-        device_id: u64,
-    ) -> Result<Vec<RecallInfo>, Error> {
+    pub fn check_device_recalls(env: Env, device_id: u64) -> Result<Vec<RecallInfo>, Error> {
         let recall_ids: Vec<u64> = env
             .storage()
             .persistent()

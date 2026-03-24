@@ -1,4 +1,6 @@
 #![no_std]
+#![allow(deprecated)]
+#![allow(clippy::too_many_arguments)]
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
@@ -398,8 +400,8 @@ impl HAITrackingContract {
         }
 
         let record_id = Self::next_id(&env, symbol_short!("hand_ctr"));
-        let compliance_rate_x100 = ((i64::from(compliant_actions) * 10_000)
-            / i64::from(opportunities)) as i64;
+        let compliance_rate_x100 =
+            (i64::from(compliant_actions) * 10_000) / i64::from(opportunities);
 
         let record = HandHygieneRecord {
             record_id,
@@ -462,8 +464,7 @@ impl HAITrackingContract {
             return Err(Error::DivisionByZero);
         }
 
-        let rate_per_1000_days_x100 =
-            (i64::from(numerator) * 1000 * 100) / i64::from(denominator);
+        let rate_per_1000_days_x100 = (i64::from(numerator) * 1000 * 100) / i64::from(denominator);
 
         Ok(InfectionRate {
             infection_type,

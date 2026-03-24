@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(clippy::too_many_arguments)]
 
 use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol, Vec};
 
@@ -18,20 +19,26 @@ impl DentalRecordsContract {
         tooth_notation_system: Symbol, // universal, palmer, fdi
     ) -> Result<u64, Error> {
         patient_id.require_auth();
-        
-        let mut count: u64 = env.storage().instance().get(&DataKey::ChartCount).unwrap_or(0);
+
+        let mut count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ChartCount)
+            .unwrap_or(0);
         count += 1;
-        
+
         let chart = DentalChart {
             patient_id,
             dentist_id,
             chart_date,
             tooth_notation_system,
         };
-        
-        env.storage().persistent().set(&DataKey::Chart(count), &chart);
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Chart(count), &chart);
         env.storage().instance().set(&DataKey::ChartCount, &count);
-        
+
         Ok(count)
     }
 
@@ -40,10 +47,14 @@ impl DentalRecordsContract {
         chart_id: u64,
         tooth_number: String,
         surface: Option<Symbol>, // occlusal, mesial, distal, buccal, lingual
-        condition: Symbol, // caries, filling, crown, missing, implant
+        condition: Symbol,       // caries, filling, crown, missing, implant
         condition_details: Option<String>,
     ) -> Result<(), Error> {
-        let chart: DentalChart = env.storage().persistent().get(&DataKey::Chart(chart_id)).ok_or(Error::NotFound)?;
+        let chart: DentalChart = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Chart(chart_id))
+            .ok_or(Error::NotFound)?;
         chart.dentist_id.require_auth();
 
         let tooth_cond = ToothCondition {
@@ -51,9 +62,11 @@ impl DentalRecordsContract {
             condition,
             condition_details,
         };
-        
-        env.storage().persistent().set(&DataKey::ToothCond(chart_id, tooth_number), &tooth_cond);
-        
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::ToothCond(chart_id, tooth_number), &tooth_cond);
+
         Ok(())
     }
 
@@ -67,7 +80,11 @@ impl DentalRecordsContract {
         bleeding_on_probing: bool,
         mobility: Option<u32>,
     ) -> Result<(), Error> {
-        let chart: DentalChart = env.storage().persistent().get(&DataKey::Chart(chart_id)).ok_or(Error::NotFound)?;
+        let chart: DentalChart = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Chart(chart_id))
+            .ok_or(Error::NotFound)?;
         chart.dentist_id.require_auth();
 
         let assessment = PeriodontalAssessment {
@@ -76,9 +93,11 @@ impl DentalRecordsContract {
             bleeding_on_probing,
             mobility,
         };
-        
-        env.storage().persistent().set(&DataKey::Perio(chart_id, tooth_number, site), &assessment);
-        
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Perio(chart_id, tooth_number, site), &assessment);
+
         Ok(())
     }
 
@@ -94,7 +113,11 @@ impl DentalRecordsContract {
         dentist_id.require_auth();
         patient_id.require_auth();
 
-        let mut count: u64 = env.storage().instance().get(&DataKey::PlanCount).unwrap_or(0);
+        let mut count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::PlanCount)
+            .unwrap_or(0);
         count += 1;
 
         let plan = TreatmentPlan {
@@ -120,10 +143,18 @@ impl DentalRecordsContract {
         estimated_duration: u32,
         sedation_required: bool,
     ) -> Result<u64, Error> {
-        let plan: TreatmentPlan = env.storage().persistent().get(&DataKey::Plan(treatment_plan_id)).ok_or(Error::NotFound)?;
+        let plan: TreatmentPlan = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Plan(treatment_plan_id))
+            .ok_or(Error::NotFound)?;
         plan.patient_id.require_auth();
-        
-        let mut count: u64 = env.storage().instance().get(&DataKey::AppointmentCount).unwrap_or(0);
+
+        let mut count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::AppointmentCount)
+            .unwrap_or(0);
         count += 1;
 
         let appt = Appointment {
@@ -136,7 +167,9 @@ impl DentalRecordsContract {
         };
 
         env.storage().persistent().set(&DataKey::Appt(count), &appt);
-        env.storage().instance().set(&DataKey::AppointmentCount, &count);
+        env.storage()
+            .instance()
+            .set(&DataKey::AppointmentCount, &count);
 
         Ok(count)
     }
@@ -152,10 +185,16 @@ impl DentalRecordsContract {
         post_op_instructions_hash: BytesN<32>,
     ) -> Result<(), Error> {
         dentist_id.require_auth();
-        
-        let mut appt: Appointment = env.storage().persistent().get(&DataKey::Appt(appointment_id)).ok_or(Error::NotFound)?;
+
+        let mut appt: Appointment = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Appt(appointment_id))
+            .ok_or(Error::NotFound)?;
         appt.is_completed = true;
-        env.storage().persistent().set(&DataKey::Appt(appointment_id), &appt);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Appt(appointment_id), &appt);
 
         let log = ProcedureLog {
             dentist_id,
@@ -166,7 +205,9 @@ impl DentalRecordsContract {
             post_op_instructions_hash,
         };
 
-        env.storage().persistent().set(&DataKey::ProcedureLog(appointment_id), &log);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProcedureLog(appointment_id), &log);
 
         Ok(())
     }
@@ -182,7 +223,11 @@ impl DentalRecordsContract {
     ) -> Result<u64, Error> {
         patient_id.require_auth();
 
-        let mut count: u64 = env.storage().instance().get(&DataKey::RadiographCount).unwrap_or(0);
+        let mut count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RadiographCount)
+            .unwrap_or(0);
         count += 1;
 
         let radio = Radiograph {
@@ -194,8 +239,12 @@ impl DentalRecordsContract {
             image_hash,
         };
 
-        env.storage().persistent().set(&DataKey::Radio(count), &radio);
-        env.storage().instance().set(&DataKey::RadiographCount, &count);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Radio(count), &radio);
+        env.storage()
+            .instance()
+            .set(&DataKey::RadiographCount, &count);
 
         Ok(count)
     }
@@ -212,7 +261,11 @@ impl DentalRecordsContract {
         patient_id.require_auth();
         orthodontist_id.require_auth();
 
-        let mut count: u64 = env.storage().instance().get(&DataKey::OrthoCount).unwrap_or(0);
+        let mut count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::OrthoCount)
+            .unwrap_or(0);
         count += 1;
 
         let ortho = OrthodonticTreatment {
@@ -224,7 +277,9 @@ impl DentalRecordsContract {
             estimated_duration_months,
         };
 
-        env.storage().persistent().set(&DataKey::Ortho(count), &ortho);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Ortho(count), &ortho);
         env.storage().instance().set(&DataKey::OrthoCount, &count);
 
         Ok(count)
@@ -238,7 +293,11 @@ impl DentalRecordsContract {
         arch_wire_change: bool,
         next_appointment_weeks: u32,
     ) -> Result<(), Error> {
-        let ortho: OrthodonticTreatment = env.storage().persistent().get(&DataKey::Ortho(ortho_treatment_id)).ok_or(Error::NotFound)?;
+        let ortho: OrthodonticTreatment = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Ortho(ortho_treatment_id))
+            .ok_or(Error::NotFound)?;
         ortho.orthodontist_id.require_auth();
 
         let adj = OrthoAdjustment {
@@ -248,7 +307,10 @@ impl DentalRecordsContract {
             next_appointment_weeks,
         };
 
-        env.storage().persistent().set(&DataKey::OrthoAdj(ortho_treatment_id, adjustment_date), &adj);
+        env.storage().persistent().set(
+            &DataKey::OrthoAdj(ortho_treatment_id, adjustment_date),
+            &adj,
+        );
 
         Ok(())
     }
@@ -299,7 +361,9 @@ impl DentalRecordsContract {
             consent_document_hash: consent_document_hash.clone(),
         };
 
-        env.storage().persistent().set(&DataKey::Consent(consent_document_hash), &consent);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Consent(consent_document_hash), &consent);
 
         Ok(())
     }

@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(deprecated)]
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Symbol, Vec,
@@ -54,19 +55,12 @@ impl MultisigGovernance {
         env.storage()
             .persistent()
             .set(&DataKey::Threshold, &threshold);
-        env.storage()
-            .persistent()
-            .set(&DataKey::Ttl, &ttl_seconds);
+        env.storage().persistent().set(&DataKey::Ttl, &ttl_seconds);
     }
 
     /// Any admin signer may open a new proposal. Panics if one already exists
     /// for the same action_id.
-    pub fn propose_multisig_action(
-        env: Env,
-        signer: Address,
-        action_id: Symbol,
-        payload: Bytes,
-    ) {
+    pub fn propose_multisig_action(env: Env, signer: Address, action_id: Symbol, payload: Bytes) {
         signer.require_auth();
         Self::assert_signer(&env, &signer);
 

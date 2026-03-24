@@ -1,5 +1,3 @@
-#![no_std]
-
 use soroban_sdk::{contracterror, contracttype, Address, BytesN, String, Symbol, Vec};
 
 // -----------------------------------------------------------------------

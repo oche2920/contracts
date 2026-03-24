@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 //! Security Audit Tests - Attempting to Break the Contract
-//! 
+//!
 //! This test suite attempts various attack vectors to verify the security
 //! of the allergy tracking contract.
 
@@ -17,13 +17,13 @@ use soroban_sdk::{
 fn attack_unauthorized_read_patient_data() {
     let env = Env::default();
     // NOT calling env.mock_all_auths() - this should fail
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let patient = Address::generate(&env);
     let attacker = Address::generate(&env);
-    
+
     // Attacker tries to read patient allergies without auth
     let result = client.try_get_active_allergies(&patient, &attacker);
     assert!(result.is_err());
@@ -35,16 +35,16 @@ fn attack_unauthorized_read_patient_data() {
 fn attack_unauthorized_allergy_recording() {
     let env = Env::default();
     // NOT calling env.mock_all_auths()
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let patient = Address::generate(&env);
     let attacker = Address::generate(&env);
-    
+
     let mut reactions = Vec::new(&env);
     reactions.push_back(String::from_str(&env, "fake"));
-    
+
     // Attacker tries to record fake allergy
     let result = client.try_record_allergy(
         &patient,
@@ -65,18 +65,18 @@ fn attack_unauthorized_allergy_recording() {
 fn attack_severity_downgrade_without_auth() {
     let env = Env::default();
     env.mock_all_auths(); // Auth for setup only
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let patient = Address::generate(&env);
     let provider = Address::generate(&env);
     let attacker = Address::generate(&env);
-    
+
     // Setup: Record life-threatening allergy
     let mut reactions = Vec::new(&env);
     reactions.push_back(String::from_str(&env, "anaphylaxis"));
-    
+
     let allergy_id = client.record_allergy(
         &patient,
         &provider,
@@ -87,7 +87,7 @@ fn attack_severity_downgrade_without_auth() {
         &None,
         &true,
     );
-    
+
     // With valid auth in this harness, a different provider can downgrade severity.
     // This is a permissive behavior check, not an auth failure check.
     client.update_allergy_severity(
@@ -107,16 +107,16 @@ fn attack_severity_downgrade_without_auth() {
 fn attack_data_tampering_via_duplicate() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let patient = Address::generate(&env);
     let provider = Address::generate(&env);
-    
+
     let mut reactions1 = Vec::new(&env);
     reactions1.push_back(String::from_str(&env, "anaphylaxis"));
-    
+
     // Record genuine allergy
     client.record_allergy(
         &patient,
@@ -128,11 +128,11 @@ fn attack_data_tampering_via_duplicate() {
         &None,
         &true,
     );
-    
+
     // Attempt to record duplicate with different severity
     let mut reactions2 = Vec::new(&env);
     reactions2.push_back(String::from_str(&env, "mild rash"));
-    
+
     let result = client.try_record_allergy(
         &patient,
         &provider,
@@ -143,7 +143,7 @@ fn attack_data_tampering_via_duplicate() {
         &None,
         &true,
     );
-    
+
     // Should fail with DuplicateAllergy error
     assert!(result.is_err());
 }
@@ -155,16 +155,16 @@ fn attack_modify_resolved_allergy() {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().set_timestamp(10_000);
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let patient = Address::generate(&env);
     let provider = Address::generate(&env);
-    
+
     let mut reactions = Vec::new(&env);
     reactions.push_back(String::from_str(&env, "rash"));
-    
+
     // Record and resolve allergy
     let allergy_id = client.record_allergy(
         &patient,
@@ -176,14 +176,14 @@ fn attack_modify_resolved_allergy() {
         &None,
         &true,
     );
-    
+
     client.resolve_allergy(
         &allergy_id,
         &provider,
         &9_000u64,
         &String::from_str(&env, "False positive"),
     );
-    
+
     // Attempt to update severity of resolved allergy
     let result = client.try_update_allergy_severity(
         &allergy_id,
@@ -191,7 +191,7 @@ fn attack_modify_resolved_allergy() {
         &Symbol::new(&env, "severe"),
         &String::from_str(&env, "Malicious update"),
     );
-    
+
     // Should fail with AlreadyResolved error
     assert!(result.is_err());
 }
@@ -203,16 +203,16 @@ fn attack_double_resolution() {
     let env = Env::default();
     env.mock_all_auths();
     env.ledger().set_timestamp(10_000);
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let patient = Address::generate(&env);
     let provider = Address::generate(&env);
-    
+
     let mut reactions = Vec::new(&env);
     reactions.push_back(String::from_str(&env, "hives"));
-    
+
     let allergy_id = client.record_allergy(
         &patient,
         &provider,
@@ -223,7 +223,7 @@ fn attack_double_resolution() {
         &None,
         &true,
     );
-    
+
     // First resolution
     client.resolve_allergy(
         &allergy_id,
@@ -231,7 +231,7 @@ fn attack_double_resolution() {
         &9_000u64,
         &String::from_str(&env, "Resolved"),
     );
-    
+
     // Attempt second resolution
     let result = client.try_resolve_allergy(
         &allergy_id,
@@ -239,7 +239,7 @@ fn attack_double_resolution() {
         &2000u64,
         &String::from_str(&env, "Malicious re-resolution"),
     );
-    
+
     // Should fail with AlreadyResolved error
     assert!(result.is_err());
 }
@@ -250,29 +250,22 @@ fn attack_double_resolution() {
 fn attack_invalid_severity_injection() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let patient = Address::generate(&env);
     let provider = Address::generate(&env);
-    
+
     let mut reactions = Vec::new(&env);
     reactions.push_back(String::from_str(&env, "reaction"));
-    
+
     // Attempt various invalid severity values
     let invalid_severities = vec![
-        "critical",
-        "extreme",
-        "low",
-        "high",
-        "none",
-        "unknown",
-        "123",
-        "",
+        "critical", "extreme", "low", "high", "none", "unknown", "123", "",
         "SEVERE", // case sensitive
     ];
-    
+
     for invalid in invalid_severities {
         let result = client.try_record_allergy(
             &patient,
@@ -284,7 +277,7 @@ fn attack_invalid_severity_injection() {
             &None,
             &true,
         );
-        
+
         // All should fail with InvalidSeverity error
         assert!(result.is_err(), "Should reject severity: {}", invalid);
     }
@@ -296,16 +289,16 @@ fn attack_invalid_severity_injection() {
 fn attack_invalid_allergen_type_injection() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let patient = Address::generate(&env);
     let provider = Address::generate(&env);
-    
+
     let mut reactions = Vec::new(&env);
     reactions.push_back(String::from_str(&env, "reaction"));
-    
+
     // Attempt various invalid allergen types
     let invalid_types = vec![
         "drug",
@@ -316,7 +309,7 @@ fn attack_invalid_allergen_type_injection() {
         "123",
         "",
     ];
-    
+
     for invalid in invalid_types {
         let result = client.try_record_allergy(
             &patient,
@@ -328,7 +321,7 @@ fn attack_invalid_allergen_type_injection() {
             &None,
             &true,
         );
-        
+
         // All should fail with InvalidAllergenType error
         assert!(result.is_err(), "Should reject type: {}", invalid);
     }
@@ -340,16 +333,16 @@ fn attack_invalid_allergen_type_injection() {
 fn attack_nonexistent_allergy_access() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let provider = Address::generate(&env);
-    
+
     // Attempt to get non-existent allergy
     let result1 = client.try_get_allergy(&999999);
     assert!(result1.is_err());
-    
+
     // Attempt to update non-existent allergy
     let result2 = client.try_update_allergy_severity(
         &999999,
@@ -358,7 +351,7 @@ fn attack_nonexistent_allergy_access() {
         &String::from_str(&env, "Malicious"),
     );
     assert!(result2.is_err());
-    
+
     // Attempt to resolve non-existent allergy
     let result3 = client.try_resolve_allergy(
         &999999,
@@ -375,12 +368,12 @@ fn attack_nonexistent_allergy_access() {
 fn attack_cross_sensitivity_poisoning_without_auth() {
     let env = Env::default();
     // NOT calling env.mock_all_auths()
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let attacker = Address::generate(&env);
-    
+
     // Attacker tries to create false cross-sensitivity
     let result = client.try_register_cross_sensitivity(
         &attacker,
@@ -396,16 +389,16 @@ fn attack_cross_sensitivity_poisoning_without_auth() {
 fn attack_mass_allergy_spam() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let patient = Address::generate(&env);
     let provider = Address::generate(&env);
-    
+
     let mut reactions = Vec::new(&env);
     reactions.push_back(String::from_str(&env, "reaction"));
-    
+
     // Try to create 100 allergies (should work but be expensive)
     let mut count = 0;
     for i in 0..100 {
@@ -420,12 +413,12 @@ fn attack_mass_allergy_spam() {
             &None,
             &true,
         );
-        
+
         if result.is_ok() {
             count += 1;
         }
     }
-    
+
     // System should handle this (though it may be expensive)
     assert!(count > 0, "System should handle multiple allergies");
 }
@@ -436,16 +429,16 @@ fn attack_mass_allergy_spam() {
 fn attack_empty_string_injection() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let patient = Address::generate(&env);
     let provider = Address::generate(&env);
-    
+
     let mut reactions = Vec::new(&env);
     reactions.push_back(String::from_str(&env, ""));
-    
+
     // Try to record allergy with empty allergen name
     let result = client.try_record_allergy(
         &patient,
@@ -457,7 +450,7 @@ fn attack_empty_string_injection() {
         &None,
         &true,
     );
-    
+
     // System allows this (may want to add validation)
     // This is a potential vulnerability - empty allergen names
     if result.is_ok() {
@@ -471,19 +464,19 @@ fn attack_empty_string_injection() {
 fn attack_long_string_injection() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let patient = Address::generate(&env);
     let provider = Address::generate(&env);
-    
+
     // Create very long allergen name (1000 characters)
     let long_allergen = "A".repeat(1000);
-    
+
     let mut reactions = Vec::new(&env);
     reactions.push_back(String::from_str(&env, "reaction"));
-    
+
     let result = client.try_record_allergy(
         &patient,
         &provider,
@@ -494,7 +487,7 @@ fn attack_long_string_injection() {
         &None,
         &true,
     );
-    
+
     // System may accept this (storage cost will be high)
     if result.is_ok() {
         println!("WARNING: System accepts very long allergen names");
@@ -507,16 +500,16 @@ fn attack_long_string_injection() {
 fn attack_negative_timestamp() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let patient = Address::generate(&env);
     let provider = Address::generate(&env);
-    
+
     let mut reactions = Vec::new(&env);
     reactions.push_back(String::from_str(&env, "reaction"));
-    
+
     // Try with zero onset date
     let result = client.try_record_allergy(
         &patient,
@@ -528,7 +521,7 @@ fn attack_negative_timestamp() {
         &Some(0u64), // Zero timestamp
         &true,
     );
-    
+
     // System accepts this (may want validation)
     if result.is_ok() {
         println!("WARNING: System accepts zero timestamps");
@@ -541,17 +534,17 @@ fn attack_negative_timestamp() {
 fn attack_race_condition_severity_updates() {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     let contract_id = env.register(AllergyTrackingContract, ());
     let client = AllergyTrackingContractClient::new(&env, &contract_id);
-    
+
     let patient = Address::generate(&env);
     let provider1 = Address::generate(&env);
     let provider2 = Address::generate(&env);
-    
+
     let mut reactions = Vec::new(&env);
     reactions.push_back(String::from_str(&env, "reaction"));
-    
+
     let allergy_id = client.record_allergy(
         &patient,
         &provider1,
@@ -562,7 +555,7 @@ fn attack_race_condition_severity_updates() {
         &None,
         &true,
     );
-    
+
     // Two providers try to update severity simultaneously
     client.update_allergy_severity(
         &allergy_id,
@@ -570,14 +563,14 @@ fn attack_race_condition_severity_updates() {
         &Symbol::new(&env, "moderate"),
         &String::from_str(&env, "Update 1"),
     );
-    
+
     client.update_allergy_severity(
         &allergy_id,
         &provider2,
         &Symbol::new(&env, "severe"),
         &String::from_str(&env, "Update 2"),
     );
-    
+
     // Both should succeed - history tracks both
     let history = client.get_severity_history(&allergy_id);
     assert_eq!(history.len(), 2, "Both updates should be recorded");

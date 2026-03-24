@@ -4,7 +4,13 @@ use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, String, S
 
 use crate::{AllergyManagement, AllergyManagementClient, AllergyStatus, RecordAllergyRequest};
 
-fn create_test_env() -> (Env, Address, Address, Address, AllergyManagementClient<'static>) {
+fn create_test_env() -> (
+    Env,
+    Address,
+    Address,
+    Address,
+    AllergyManagementClient<'static>,
+) {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -42,7 +48,7 @@ fn create_allergy_request(
 #[test]
 fn test_initialize() {
     let (env, _admin, _, _, _client) = create_test_env();
-    
+
     // Verify initialization succeeded (no panic)
     assert!(env.auths().len() > 0);
 }
@@ -51,7 +57,7 @@ fn test_initialize() {
 #[should_panic(expected = "Contract already initialized")]
 fn test_double_initialize() {
     let (_, admin, _, _, client) = create_test_env();
-    
+
     // Try to initialize again
     client.initialize(&admin);
 }
@@ -303,8 +309,8 @@ fn test_check_drug_allergy_interaction() {
 
     client.record_allergy(&patient, &provider, &request);
 
-    let interactions = client
-        .check_drug_allergy_interaction(&patient, &String::from_str(&env, "Penicillin"));
+    let interactions =
+        client.check_drug_allergy_interaction(&patient, &String::from_str(&env, "Penicillin"));
 
     assert_eq!(interactions.len(), 1);
     let interaction = interactions.get(0).unwrap();
@@ -333,8 +339,8 @@ fn test_check_drug_no_interaction() {
 
     client.record_allergy(&patient, &provider, &request);
 
-    let interactions = client
-        .check_drug_allergy_interaction(&patient, &String::from_str(&env, "Aspirin"));
+    let interactions =
+        client.check_drug_allergy_interaction(&patient, &String::from_str(&env, "Aspirin"));
 
     assert_eq!(interactions.len(), 0);
 }

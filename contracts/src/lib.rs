@@ -1,3 +1,6 @@
+#![allow(deprecated)]
+#![allow(non_snake_case)]
+
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String, Vec,
 };

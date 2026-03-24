@@ -1,9 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{
-    testutils::Address as _, vec, Address, BytesN, Env, String, Symbol,
-};
+use soroban_sdk::{testutils::Address as _, vec, Address, BytesN, Env, String, Symbol};
 
 fn setup() -> (Env, MaternalChildHealthContractClient<'static>) {
     let env = Env::default();
@@ -13,19 +11,21 @@ fn setup() -> (Env, MaternalChildHealthContractClient<'static>) {
     (env, client)
 }
 
-fn seed_pregnancy(env: &Env, client: &MaternalChildHealthContractClient<'static>) -> (Address, Address, u64) {
+fn seed_pregnancy(
+    env: &Env,
+    client: &MaternalChildHealthContractClient<'static>,
+) -> (Address, Address, u64) {
     let patient = Address::generate(env);
     let provider = Address::generate(env);
-    let pregnancy_id = client
-        .create_pregnancy_record(
-            &patient,
-            &provider,
-            &1_700_000_000,
-            &1_725_000_000,
-            &2,
-            &1,
-            &vec![env, Symbol::new(env, "diabetes")],
-        );
+    let pregnancy_id = client.create_pregnancy_record(
+        &patient,
+        &provider,
+        &1_700_000_000,
+        &1_725_000_000,
+        &2,
+        &1,
+        &vec![env, Symbol::new(env, "diabetes")],
+    );
     (patient, provider, pregnancy_id)
 }
 
@@ -65,37 +65,34 @@ fn test_prenatal_visit_screening_and_ultrasound() {
     let (env, client) = setup();
     let (_patient, _provider, pregnancy_id) = seed_pregnancy(&env, &client);
 
-    client
-        .record_prenatal_visit(
-            &pregnancy_id,
-            &1_701_000_000,
-            &12,
-            &6_850,
-            &String::from_str(&env, "118/74"),
-            &Some(14),
-            &Some(145),
-            &BytesN::from_array(&env, &[11u8; 32]),
-        );
+    client.record_prenatal_visit(
+        &pregnancy_id,
+        &1_701_000_000,
+        &12,
+        &6_850,
+        &String::from_str(&env, "118/74"),
+        &Some(14),
+        &Some(145),
+        &BytesN::from_array(&env, &[11u8; 32]),
+    );
 
-    client
-        .record_prenatal_screening(
-            &pregnancy_id,
-            &Symbol::new(&env, "quad_screen"),
-            &1_701_100_000,
-            &BytesN::from_array(&env, &[22u8; 32]),
-            &false,
-        );
+    client.record_prenatal_screening(
+        &pregnancy_id,
+        &Symbol::new(&env, "quad_screen"),
+        &1_701_100_000,
+        &BytesN::from_array(&env, &[22u8; 32]),
+        &false,
+    );
 
-    client
-        .record_ultrasound(
-            &pregnancy_id,
-            &1_701_200_000,
-            &20,
-            &Some(350),
-            &Symbol::new(&env, "normal"),
-            &String::from_str(&env, "posterior"),
-            &BytesN::from_array(&env, &[33u8; 32]),
-        );
+    client.record_ultrasound(
+        &pregnancy_id,
+        &1_701_200_000,
+        &20,
+        &Some(350),
+        &Symbol::new(&env, "normal"),
+        &String::from_str(&env, "posterior"),
+        &BytesN::from_array(&env, &[33u8; 32]),
+    );
 
     let pregnancy = client.get_pregnancy_record(&pregnancy_id);
     assert_eq!(pregnancy.prenatal_visits.len(), 1);
@@ -113,52 +110,48 @@ fn test_labor_delivery_and_newborn_flow() {
     let (env, client) = setup();
     let (_patient, provider, pregnancy_id) = seed_pregnancy(&env, &client);
 
-    let labor_id = client
-        .document_labor_admission(
-            &pregnancy_id,
-            &1_724_900_000,
-            &true,
-            &Symbol::new(&env, "intact"),
-            &6,
-            &90,
-        );
+    let labor_id = client.document_labor_admission(
+        &pregnancy_id,
+        &1_724_900_000,
+        &true,
+        &Symbol::new(&env, "intact"),
+        &6,
+        &90,
+    );
 
-    let delivery_id = client
-        .record_delivery(
-            &labor_id,
-            &1_725_000_000,
-            &Symbol::new(&env, "vaginal"),
-            &Symbol::new(&env, "vertex"),
-            &vec![&env, Symbol::new(&env, "none")],
-            &350,
-            &provider,
-        );
+    let delivery_id = client.record_delivery(
+        &labor_id,
+        &1_725_000_000,
+        &Symbol::new(&env, "vaginal"),
+        &Symbol::new(&env, "vertex"),
+        &vec![&env, Symbol::new(&env, "none")],
+        &350,
+        &provider,
+    );
 
-    let newborn1 = client
-        .record_newborn(
-            &delivery_id,
-            &1_725_000_100,
-            &symbol_short!("female"),
-            &3200,
-            &50,
-            &34,
-            &8,
-            &9,
-            &39,
-        );
+    let newborn1 = client.record_newborn(
+        &delivery_id,
+        &1_725_000_100,
+        &symbol_short!("female"),
+        &3200,
+        &50,
+        &34,
+        &8,
+        &9,
+        &39,
+    );
 
-    let newborn2 = client
-        .record_newborn(
-            &delivery_id,
-            &1_725_000_110,
-            &symbol_short!("male"),
-            &2900,
-            &49,
-            &33,
-            &8,
-            &9,
-            &39,
-        );
+    let newborn2 = client.record_newborn(
+        &delivery_id,
+        &1_725_000_110,
+        &symbol_short!("male"),
+        &2900,
+        &49,
+        &33,
+        &8,
+        &9,
+        &39,
+    );
 
     assert_ne!(newborn1, newborn2);
 
@@ -234,28 +227,33 @@ fn test_pediatric_growth_milestones_well_child() {
     let (env, client) = setup();
     let patient = Address::generate(&env);
 
-    client
-        .track_pediatric_growth(&patient, &1_730_000_000, &12, &980, &7550, &Some(4600), &1720);
+    client.track_pediatric_growth(
+        &patient,
+        &1_730_000_000,
+        &12,
+        &980,
+        &7550,
+        &Some(4600),
+        &1720,
+    );
 
-    client
-        .record_developmental_milestone(
-            &patient,
-            &1_730_000_100,
-            &12,
-            &Symbol::new(&env, "motor"),
-            &vec![&env, Symbol::new(&env, "walks")],
-            &vec![&env],
-        );
+    client.record_developmental_milestone(
+        &patient,
+        &1_730_000_100,
+        &12,
+        &Symbol::new(&env, "motor"),
+        &vec![&env, Symbol::new(&env, "walks")],
+        &vec![&env],
+    );
 
-    client
-        .track_well_child_visit(
-            &patient,
-            &1_730_000_200,
-            &12,
-            &vec![&env, Symbol::new(&env, "mmr")],
-            &true,
-            &BytesN::from_array(&env, &[44u8; 32]),
-        );
+    client.track_well_child_visit(
+        &patient,
+        &1_730_000_200,
+        &12,
+        &vec![&env, Symbol::new(&env, "mmr")],
+        &true,
+        &BytesN::from_array(&env, &[44u8; 32]),
+    );
 
     let growth = client.get_growth_record(&patient, &12);
     assert_eq!(growth.measurements.weight_kg_x100, 980);
@@ -307,15 +305,8 @@ fn test_invalid_inputs_failures() {
     assert!(bad_newborn.is_err());
 
     let patient = Address::generate(&env);
-    let bad_growth = client.try_track_pediatric_growth(
-        &patient,
-        &1_730_000_000,
-        &12,
-        &0,
-        &7550,
-        &None,
-        &1720,
-    );
+    let bad_growth =
+        client.try_track_pediatric_growth(&patient, &1_730_000_000, &12, &0, &7550, &None, &1720);
     assert!(bad_growth.is_err());
 }
 
@@ -324,18 +315,17 @@ fn test_calculate_growth_percentiles() {
     let (env, client) = setup();
     let patient = Address::generate(&env);
 
-    let percentiles = client
-        .calculate_growth_percentiles(
-            &patient,
-            &symbol_short!("female"),
-            &12,
-            &PediatricMeasurements {
-                weight_kg_x100: 960,
-                height_cm_x100: 7500,
-                head_circumference_cm_x100: Some(4550),
-                bmi_x100: 1700,
-            },
-        );
+    let percentiles = client.calculate_growth_percentiles(
+        &patient,
+        &symbol_short!("female"),
+        &12,
+        &PediatricMeasurements {
+            weight_kg_x100: 960,
+            height_cm_x100: 7500,
+            head_circumference_cm_x100: Some(4550),
+            bmi_x100: 1700,
+        },
+    );
 
     assert!(percentiles.weight_percentile_x100 >= 0);
     assert!(percentiles.weight_percentile_x100 <= 10_000);

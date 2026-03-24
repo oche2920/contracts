@@ -68,24 +68,13 @@ fn test_assess_discharge_readiness() {
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
     // First create a discharge plan
-    let plan_id = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     // Assess readiness
     let notes = String::from_str(&env, "Patient stable");
-    let assessment = client.assess_discharge_readiness(
-        &admin,
-        &plan_id,
-        &85u32,
-        &80u32,
-        &90u32,
-        &notes,
-    );
+    let assessment =
+        client.assess_discharge_readiness(&admin, &plan_id, &85u32, &80u32, &90u32, &notes);
 
     assert_eq!(assessment.discharge_plan_id, plan_id);
     assert_eq!(assessment.medical_stability_score, 85);
@@ -101,23 +90,12 @@ fn test_assess_discharge_readiness_needs_preparation() {
     let contract_id = env.register_contract(None, HospitalDischargeContract);
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
-    let plan_id = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     let notes = String::from_str(&env, "Needs home health setup");
-    let assessment = client.assess_discharge_readiness(
-        &admin,
-        &plan_id,
-        &70u32,
-        &60u32,
-        &65u32,
-        &notes,
-    );
+    let assessment =
+        client.assess_discharge_readiness(&admin, &plan_id, &70u32, &60u32, &65u32, &notes);
 
     assert_eq!(assessment.overall_score, 65);
     assert_eq!(assessment.readiness_level, ReadinessLevel::NeedsPreparation);
@@ -129,23 +107,12 @@ fn test_assess_discharge_readiness_not_ready() {
     let contract_id = env.register_contract(None, HospitalDischargeContract);
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
-    let plan_id = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     let notes = String::from_str(&env, "Medical instability");
-    let assessment = client.assess_discharge_readiness(
-        &admin,
-        &plan_id,
-        &40u32,
-        &50u32,
-        &45u32,
-        &notes,
-    );
+    let assessment =
+        client.assess_discharge_readiness(&admin, &plan_id, &40u32, &50u32, &45u32, &notes);
 
     assert_eq!(assessment.overall_score, 45);
     assert_eq!(assessment.readiness_level, ReadinessLevel::NotReady);
@@ -157,13 +124,8 @@ fn test_create_discharge_orders() {
     let contract_id = env.register_contract(None, HospitalDischargeContract);
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
-    let plan_id = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     let mut medications = Vec::new(&env);
     medications.push_back(DischargeMedication {
@@ -186,20 +148,22 @@ fn test_arrange_home_health() {
     let contract_id = env.register_contract(None, HospitalDischargeContract);
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
-    let plan_id = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     let agency_id = BytesN::from_array(&env, &[3u8; 32]);
     let service_type = String::from_str(&env, "Nursing");
     let frequency = String::from_str(&env, "3x per week");
     let start_date = 2100u64;
 
-    client.arrange_home_health(&admin, &plan_id, &agency_id, &service_type, &frequency, &start_date);
+    client.arrange_home_health(
+        &admin,
+        &plan_id,
+        &agency_id,
+        &service_type,
+        &frequency,
+        &start_date,
+    );
 }
 
 #[test]
@@ -208,13 +172,8 @@ fn test_order_dme_for_discharge() {
     let contract_id = env.register_contract(None, HospitalDischargeContract);
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
-    let plan_id = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     let mut equipment_list = Vec::new(&env);
     equipment_list.push_back(String::from_str(&env, "Walker"));
@@ -223,7 +182,13 @@ fn test_order_dme_for_discharge() {
     let supplier_id = BytesN::from_array(&env, &[4u8; 32]);
     let delivery_date = 1900u64;
 
-    client.order_dme_for_discharge(&admin, &plan_id, &equipment_list, &supplier_id, &delivery_date);
+    client.order_dme_for_discharge(
+        &admin,
+        &plan_id,
+        &equipment_list,
+        &supplier_id,
+        &delivery_date,
+    );
 }
 
 #[test]
@@ -232,13 +197,8 @@ fn test_schedule_followup_appointments() {
     let contract_id = env.register_contract(None, HospitalDischargeContract);
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
-    let plan_id = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     let mut appointments = Vec::new(&env);
     appointments.push_back(FollowUpAppointment {
@@ -259,13 +219,8 @@ fn test_provide_discharge_education() {
     let contract_id = env.register_contract(None, HospitalDischargeContract);
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
-    let plan_id = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     let mut topics = Vec::new(&env);
     topics.push_back(String::from_str(&env, "Medication management"));
@@ -284,19 +239,20 @@ fn test_coordinate_with_snf() {
     let contract_id = env.register_contract(None, HospitalDischargeContract);
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
-    let plan_id = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     let snf_id = BytesN::from_array(&env, &[6u8; 32]);
     let transfer_date = 2050u64;
     let care_requirements = String::from_str(&env, "24/7 nursing care");
 
-    client.coordinate_with_snf(&admin, &plan_id, &snf_id, &transfer_date, &care_requirements);
+    client.coordinate_with_snf(
+        &admin,
+        &plan_id,
+        &snf_id,
+        &transfer_date,
+        &care_requirements,
+    );
 }
 
 #[test]
@@ -305,13 +261,8 @@ fn test_complete_discharge() {
     let contract_id = env.register_contract(None, HospitalDischargeContract);
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
-    let plan_id = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     let actual_discharge_date = 1950u64;
     let destination = String::from_str(&env, "Home");
@@ -330,13 +281,8 @@ fn test_track_readmission_risk_high() {
     let contract_id = env.register_contract(None, HospitalDischargeContract);
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
-    let plan_id = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     let mut risk_factors = Vec::new(&env);
     risk_factors.push_back(String::from_str(&env, "Multiple comorbidities"));
@@ -353,13 +299,8 @@ fn test_track_readmission_risk_medium() {
     let contract_id = env.register_contract(None, HospitalDischargeContract);
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
-    let plan_id = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     let mut risk_factors = Vec::new(&env);
     risk_factors.push_back(String::from_str(&env, "Recent surgery"));
@@ -375,13 +316,8 @@ fn test_track_readmission_risk_low() {
     let contract_id = env.register_contract(None, HospitalDischargeContract);
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
-    let plan_id = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     let mut risk_factors = Vec::new(&env);
     risk_factors.push_back(String::from_str(&env, "Good support system"));
@@ -410,23 +346,13 @@ fn test_multiple_discharge_plans() {
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
     // Create first plan
-    let plan_id_1 = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id_1 =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     // Create second plan
     let patient_id_2 = BytesN::from_array(&env, &[10u8; 32]);
-    let plan_id_2 = client.initiate_discharge_planning(
-        &admin,
-        &patient_id_2,
-        &hospital_id,
-        &1500u64,
-        &2500u64,
-    );
+    let plan_id_2 =
+        client.initiate_discharge_planning(&admin, &patient_id_2, &hospital_id, &1500u64, &2500u64);
 
     assert_eq!(plan_id_1, 0);
     assert_eq!(plan_id_2, 1);
@@ -446,13 +372,8 @@ fn test_full_discharge_workflow() {
     let client = HospitalDischargeContractClient::new(&env, &contract_id);
 
     // 1. Initiate discharge planning
-    let plan_id = client.initiate_discharge_planning(
-        &admin,
-        &patient_id,
-        &hospital_id,
-        &1000u64,
-        &2000u64,
-    );
+    let plan_id =
+        client.initiate_discharge_planning(&admin, &patient_id, &hospital_id, &1000u64, &2000u64);
 
     // 2. Assess readiness
     let notes = String::from_str(&env, "Ready for discharge");
@@ -516,12 +437,7 @@ fn test_full_discharge_workflow() {
     );
 
     // 8. Complete discharge
-    client.complete_discharge(
-        &admin,
-        &plan_id,
-        &1950u64,
-        &String::from_str(&env, "Home"),
-    );
+    client.complete_discharge(&admin, &plan_id, &1950u64, &String::from_str(&env, "Home"));
 
     // Verify final state
     let plan = client.get_discharge_plan(&plan_id);

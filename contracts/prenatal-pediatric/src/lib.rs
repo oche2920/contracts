@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(clippy::too_many_arguments)]
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
@@ -359,7 +360,9 @@ impl MaternalChildHealthContract {
             cervical_effacement,
         };
 
-        env.storage().persistent().set(&DataKey::Labor(labor_id), &labor);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Labor(labor_id), &labor);
 
         Ok(labor_id)
     }
@@ -520,7 +523,9 @@ impl MaternalChildHealthContract {
             measurements,
         };
 
-        env.storage().persistent().set(&DataKey::Growth(growth_id), &growth);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Growth(growth_id), &growth);
         env.storage()
             .persistent()
             .set(&DataKey::GrowthByAge(patient_id, age_months), &growth_id);
@@ -606,10 +611,12 @@ impl MaternalChildHealthContract {
         let expected_hc = Self::expected_head_circumference_cm_x100(age_months, &sex);
         let expected_bmi = Self::expected_bmi_x100(age_months, &sex);
 
-        let weight_percentile_x100 = Self::estimate_percentile(measurements.weight_kg_x100, expected_weight, 120);
+        let weight_percentile_x100 =
+            Self::estimate_percentile(measurements.weight_kg_x100, expected_weight, 120);
         let height_percentile_x100 =
             Self::estimate_percentile(measurements.height_cm_x100, expected_height, 300);
-        let bmi_percentile_x100 = Self::estimate_percentile(measurements.bmi_x100, expected_bmi, 120);
+        let bmi_percentile_x100 =
+            Self::estimate_percentile(measurements.bmi_x100, expected_bmi, 120);
         let head_circ_pct_x100 = measurements
             .head_circumference_cm_x100
             .map(|hc| Self::estimate_percentile(hc, expected_hc, 180));
@@ -704,7 +711,9 @@ impl MaternalChildHealthContract {
         raw[16..24].copy_from_slice(&env.ledger().timestamp().to_be_bytes());
         raw[24..28].copy_from_slice(&env.ledger().sequence().to_be_bytes());
         let salt = BytesN::from_array(env, &raw);
-        env.deployer().with_current_contract(salt).deployed_address()
+        env.deployer()
+            .with_current_contract(salt)
+            .deployed_address()
     }
 
     fn estimate_percentile(value: i64, expected: i64, sd: i64) -> i64 {
@@ -720,7 +729,11 @@ impl MaternalChildHealthContract {
     }
 
     fn expected_weight_kg_x100(age_months: u32, sex: &Symbol) -> i64 {
-        let base = if *sex == symbol_short!("male") { 370 } else { 350 };
+        let base = if *sex == symbol_short!("male") {
+            370
+        } else {
+            350
+        };
         if age_months <= 12 {
             base + i64::from(age_months) * 60
         } else {
@@ -729,7 +742,11 @@ impl MaternalChildHealthContract {
     }
 
     fn expected_height_cm_x100(age_months: u32, sex: &Symbol) -> i64 {
-        let base = if *sex == symbol_short!("male") { 5100 } else { 5000 };
+        let base = if *sex == symbol_short!("male") {
+            5100
+        } else {
+            5000
+        };
         if age_months <= 12 {
             base + i64::from(age_months) * 250
         } else {
@@ -738,7 +755,11 @@ impl MaternalChildHealthContract {
     }
 
     fn expected_head_circumference_cm_x100(age_months: u32, sex: &Symbol) -> i64 {
-        let base = if *sex == symbol_short!("male") { 3550 } else { 3450 };
+        let base = if *sex == symbol_short!("male") {
+            3550
+        } else {
+            3450
+        };
         let growth = if age_months <= 24 {
             i64::from(age_months) * 70
         } else {
@@ -748,7 +769,11 @@ impl MaternalChildHealthContract {
     }
 
     fn expected_bmi_x100(_age_months: u32, sex: &Symbol) -> i64 {
-        if *sex == symbol_short!("male") { 1720 } else { 1680 }
+        if *sex == symbol_short!("male") {
+            1720
+        } else {
+            1680
+        }
     }
 }
 

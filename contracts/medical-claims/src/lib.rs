@@ -1,17 +1,17 @@
 #![no_std]
+#![allow(clippy::too_many_arguments)]
 
-mod types;
 mod test;
+mod types;
 
-use soroban_sdk::{contract, contractimpl, Env, Address, String, Vec, BytesN};
-use types::{DataKey, Error, ServiceLine, ClaimStatus, ClaimRecord, DenialInfo};
+use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Vec};
+use types::{ClaimRecord, ClaimStatus, DataKey, DenialInfo, Error, ServiceLine};
 
 #[contract]
 pub struct MedicalClaimsSystem;
 
 #[contractimpl]
 impl MedicalClaimsSystem {
-    
     pub fn submit_claim(
         env: Env,
         provider_id: Address,
@@ -31,7 +31,9 @@ impl MedicalClaimsSystem {
             .get(&DataKey::ClaimCounter)
             .unwrap_or(0);
         let claim_id = count + 1;
-        env.storage().instance().set(&DataKey::ClaimCounter, &claim_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::ClaimCounter, &claim_id);
 
         let claim = ClaimRecord {
             claim_id,
@@ -49,16 +51,30 @@ impl MedicalClaimsSystem {
             appeal_level: 0,
         };
 
-        env.storage().persistent().set(&DataKey::Claim(claim_id), &claim);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Claim(claim_id), &claim);
 
         // Store mappings
-        let mut p_claims: Vec<u64> = env.storage().persistent().get(&DataKey::ProviderClaims(provider_id.clone())).unwrap_or(Vec::new(&env));
+        let mut p_claims: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProviderClaims(provider_id.clone()))
+            .unwrap_or(Vec::new(&env));
         p_claims.push_back(claim_id);
-        env.storage().persistent().set(&DataKey::ProviderClaims(provider_id), &p_claims);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProviderClaims(provider_id), &p_claims);
 
-        let mut pat_claims: Vec<u64> = env.storage().persistent().get(&DataKey::PatientClaims(patient_id.clone())).unwrap_or(Vec::new(&env));
+        let mut pat_claims: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::PatientClaims(patient_id.clone()))
+            .unwrap_or(Vec::new(&env));
         pat_claims.push_back(claim_id);
-        env.storage().persistent().set(&DataKey::PatientClaims(patient_id), &pat_claims);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PatientClaims(patient_id), &pat_claims);
 
         Ok(claim_id)
     }
@@ -74,7 +90,11 @@ impl MedicalClaimsSystem {
     ) -> Result<(), Error> {
         insurance_admin.require_auth();
 
-        let mut claim: ClaimRecord = env.storage().persistent().get(&DataKey::Claim(claim_id)).ok_or(Error::ClaimNotFound)?;
+        let mut claim: ClaimRecord = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Claim(claim_id))
+            .ok_or(Error::ClaimNotFound)?;
 
         if claim.status != ClaimStatus::Submitted && claim.status != ClaimStatus::Appealed {
             return Err(Error::InvalidStateTransition);
@@ -84,9 +104,15 @@ impl MedicalClaimsSystem {
         claim.approved_amount = Some(approved_amount);
         claim.patient_responsibility = Some(patient_responsibility);
 
-        env.storage().persistent().set(&DataKey::Claim(claim_id), &claim);
-        env.storage().persistent().set(&DataKey::ApprovedLines(claim_id), &approved_lines);
-        env.storage().persistent().set(&DataKey::DenialInfos(claim_id), &denied_lines);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Claim(claim_id), &claim);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ApprovedLines(claim_id), &approved_lines);
+        env.storage()
+            .persistent()
+            .set(&DataKey::DenialInfos(claim_id), &denied_lines);
 
         Ok(())
     }
@@ -100,7 +126,11 @@ impl MedicalClaimsSystem {
     ) -> Result<u64, Error> {
         provider_id.require_auth();
 
-        let mut claim: ClaimRecord = env.storage().persistent().get(&DataKey::Claim(claim_id)).ok_or(Error::ClaimNotFound)?;
+        let mut claim: ClaimRecord = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Claim(claim_id))
+            .ok_or(Error::ClaimNotFound)?;
 
         if claim.provider_id != provider_id {
             return Err(Error::NotAuthorized);
@@ -117,7 +147,9 @@ impl MedicalClaimsSystem {
         claim.status = ClaimStatus::Appealed;
         claim.appeal_level = appeal_level;
 
-        env.storage().persistent().set(&DataKey::Claim(claim_id), &claim);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Claim(claim_id), &claim);
 
         Ok(claim_id)
     }
@@ -132,16 +164,25 @@ impl MedicalClaimsSystem {
     ) -> Result<(), Error> {
         insurance_admin.require_auth();
 
-        let mut claim: ClaimRecord = env.storage().persistent().get(&DataKey::Claim(claim_id)).ok_or(Error::ClaimNotFound)?;
+        let mut claim: ClaimRecord = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Claim(claim_id))
+            .ok_or(Error::ClaimNotFound)?;
 
         if claim.status != ClaimStatus::Adjudicated {
             return Err(Error::InvalidStateTransition);
         }
 
         claim.status = ClaimStatus::Paid;
-        env.storage().persistent().set(&DataKey::Claim(claim_id), &claim);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Claim(claim_id), &claim);
 
-        env.storage().persistent().set(&DataKey::ClaimPayment(claim_id), &(payment_date, payment_reference));
+        env.storage().persistent().set(
+            &DataKey::ClaimPayment(claim_id),
+            &(payment_date, payment_reference),
+        );
 
         Ok(())
     }
@@ -155,7 +196,11 @@ impl MedicalClaimsSystem {
     ) -> Result<(), Error> {
         patient_id.require_auth();
 
-        let mut claim: ClaimRecord = env.storage().persistent().get(&DataKey::Claim(claim_id)).ok_or(Error::ClaimNotFound)?;
+        let mut claim: ClaimRecord = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Claim(claim_id))
+            .ok_or(Error::ClaimNotFound)?;
 
         if claim.patient_id != patient_id {
             return Err(Error::NotAuthorized);
@@ -175,8 +220,13 @@ impl MedicalClaimsSystem {
             claim.status = ClaimStatus::Closed;
         }
 
-        env.storage().persistent().set(&DataKey::Claim(claim_id), &claim);
-        env.storage().persistent().set(&DataKey::PatientPayment(claim_id), &(payment_date, payment_amount));
+        env.storage()
+            .persistent()
+            .set(&DataKey::Claim(claim_id), &claim);
+        env.storage().persistent().set(
+            &DataKey::PatientPayment(claim_id),
+            &(payment_date, payment_amount),
+        );
 
         Ok(())
     }

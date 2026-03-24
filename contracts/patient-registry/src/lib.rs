@@ -2,8 +2,8 @@
 #![allow(deprecated)]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, BytesN, Env, Map,
-    String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Bytes,
+    BytesN, Env, Map, String, Symbol, Vec,
 };
 
 // =====================================================
@@ -92,12 +92,49 @@ pub struct RegulatoryHold {
     pub placed_at: u64,
 }
 
+#[allow(clippy::upper_case_acronyms)]
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ContractError {
+    InvalidCID = 1,
+}
+
+pub fn validate_cid(cid: &Bytes) -> Result<(), ContractError> {
+    let len = cid.len();
+
+    if len == 0 || len > 512 {
+        return Err(ContractError::InvalidCID);
+    }
+
+    let first = cid.get(0).ok_or(ContractError::InvalidCID)?;
+
+    if first == b'b' {
+        return if len >= 36 {
+            Ok(())
+        } else {
+            Err(ContractError::InvalidCID)
+        };
+    }
+
+    if len >= 2 {
+        let second = cid.get(1).ok_or(ContractError::InvalidCID)?;
+        if first == b'Q' && second == b'm' && len == 46 {
+            return Ok(());
+        }
+
+        if len == 34 && first == 0x12 && second == 0x20 {
+            return Ok(());
+        }
+    }
+
+    Err(ContractError::InvalidCID)
+}
+
 fn require_patient_or_guardian(env: &Env, patient: &Address, caller: &Address) {
     let guardian_key = DataKey::Guardian(patient.clone());
     let guardian_opt: Option<Address> = env.storage().persistent().get(&guardian_key);
-    if caller == patient {
-        caller.require_auth();
-    } else if guardian_opt.as_ref() == Some(caller) {
+    if caller == patient || guardian_opt.as_ref() == Some(caller) {
         caller.require_auth();
     } else {
         panic!("Caller is not patient or assigned guardian");
@@ -183,10 +220,8 @@ impl MedicalRegistry {
         env.storage()
             .persistent()
             .set(&DataKey::ConsentVersion, &version_hash);
-        env.events().publish(
-            (symbol_short!("consent_v"), admin),
-            version_hash,
-        );
+        env.events()
+            .publish((symbol_short!("consent_v"), admin), version_hash);
     }
 
     pub fn assign_guardian(env: Env, patient: Address, guardian: Address) {
@@ -199,10 +234,8 @@ impl MedicalRegistry {
         env.storage()
             .persistent()
             .set(&DataKey::Guardian(patient.clone()), &guardian);
-        env.events().publish(
-            (symbol_short!("grd_asgn"), patient),
-            guardian,
-        );
+        env.events()
+            .publish((symbol_short!("grd_asgn"), patient), guardian);
     }
 
     pub fn revoke_guardian(env: Env, patient: Address) {
@@ -222,12 +255,15 @@ impl MedicalRegistry {
     }
 
     pub fn get_guardian(env: Env, patient: Address) -> Option<Address> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Guardian(patient))
+        env.storage().persistent().get(&DataKey::Guardian(patient))
     }
 
-    pub fn acknowledge_consent(env: Env, patient: Address, caller: Address, version_hash: BytesN<32>) {
+    pub fn acknowledge_consent(
+        env: Env,
+        patient: Address,
+        caller: Address,
+        version_hash: BytesN<32>,
+    ) {
         require_patient_or_guardian(&env, &patient, &caller);
         let current: BytesN<32> = env
             .storage()
@@ -240,17 +276,13 @@ impl MedicalRegistry {
         env.storage()
             .persistent()
             .set(&DataKey::ConsentAck(patient.clone()), &version_hash);
-        env.events().publish(
-            (symbol_short!("consent_a"), patient),
-            version_hash,
-        );
+        env.events()
+            .publish((symbol_short!("consent_a"), patient), version_hash);
     }
 
     pub fn get_consent_status(env: Env, patient: Address) -> ConsentStatus {
-        let current_opt: Option<BytesN<32>> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::ConsentVersion);
+        let current_opt: Option<BytesN<32>> =
+            env.storage().persistent().get(&DataKey::ConsentVersion);
         let ack_opt: Option<BytesN<32>> = env
             .storage()
             .persistent()
@@ -301,7 +333,9 @@ impl MedicalRegistry {
             .get(&DataKey::PatientList)
             .unwrap_or(Vec::new(&env));
         pat_list.push_back(wallet.clone());
-        env.storage().persistent().set(&DataKey::PatientList, &pat_list);
+        env.storage()
+            .persistent()
+            .set(&DataKey::PatientList, &pat_list);
 
         env.events()
             .publish((symbol_short!("reg_pat"), wallet), symbol_short!("success"));
@@ -338,6 +372,11 @@ impl MedicalRegistry {
         env.storage().persistent().has(&key)
     }
 
+    pub fn get_total_patients(env: Env) -> u64 {
+        env.storage()
+            .instance()
+            .get(&DataKey::TotalPatients)
+            .unwrap_or(0)
     /// Extend the TTL of all persistent storage entries for a patient.
     /// Callable by the patient themselves or the contract admin.
     pub fn extend_patient_ttl(env: Env, patient: Address) {
@@ -487,7 +526,9 @@ impl MedicalRegistry {
             .get(&DataKey::DoctorList)
             .unwrap_or(Vec::new(&env));
         doc_list.push_back(wallet.clone());
-        env.storage().persistent().set(&DataKey::DoctorList, &doc_list);
+        env.storage()
+            .persistent()
+            .set(&DataKey::DoctorList, &doc_list);
 
         env.events()
             .publish((symbol_short!("reg_doc"), wallet), symbol_short!("success"));
@@ -591,8 +632,9 @@ impl MedicalRegistry {
         record_hash: Bytes,
         description: String,
         record_type: Symbol,
-    ) {
+    ) -> Result<(), ContractError> {
         doctor.require_auth();
+        validate_cid(&record_hash)?;
 
         // Collect record fee if set
         let fee: i128 = env
@@ -611,11 +653,7 @@ impl MedicalRegistry {
                 .instance()
                 .get(&DataKey::Treasury)
                 .expect("Treasury not configured");
-            token::TokenClient::new(&env, &token_id).transfer(
-                &doctor,
-                &treasury,
-                &fee,
-            );
+            token::TokenClient::new(&env, &token_id).transfer(&doctor, &treasury, &fee);
         }
 
         // Check consent
@@ -653,6 +691,7 @@ impl MedicalRegistry {
         records.push_back(record);
         env.storage().persistent().set(&records_key, &records);
 
+        Ok(())
         // Extend TTL for all patient persistent entries after writing a record
         Self::bump_patient_keys(&env, &patient);
     }
@@ -748,10 +787,7 @@ impl MedicalRegistry {
 
         const SNAPSHOT_INTERVAL: u32 = 100_000;
         let current_ledger = env.ledger().sequence();
-        let last: Option<u32> = env
-            .storage()
-            .instance()
-            .get(&DataKey::LastSnapshotLedger);
+        let last: Option<u32> = env.storage().instance().get(&DataKey::LastSnapshotLedger);
 
         if let Some(last_ledger) = last {
             if current_ledger.saturating_sub(last_ledger) < SNAPSHOT_INTERVAL {
@@ -786,20 +822,14 @@ impl MedicalRegistry {
             (symbol_short!("snap_meta"), current_ledger),
             (patient_count, doctor_count, consent_version),
         );
-        env.events().publish(
-            (symbol_short!("snap_pats"), current_ledger),
-            patients,
-        );
-        env.events().publish(
-            (symbol_short!("snap_docs"), current_ledger),
-            doctors,
-        );
+        env.events()
+            .publish((symbol_short!("snap_pats"), current_ledger), patients);
+        env.events()
+            .publish((symbol_short!("snap_docs"), current_ledger), doctors);
     }
 
     pub fn get_last_snapshot_ledger(env: Env) -> Option<u32> {
-        env.storage()
-            .instance()
-            .get(&DataKey::LastSnapshotLedger)
+        env.storage().instance().get(&DataKey::LastSnapshotLedger)
     }
 
     // =====================================================

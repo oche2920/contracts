@@ -18,10 +18,7 @@ fn make_signers(env: &Env, n: u32) -> Vec<Address> {
 }
 
 /// Sets up a contract with `n` signers, the given threshold, and a 3600s TTL.
-fn setup(
-    n: u32,
-    threshold: u32,
-) -> (Env, Vec<Address>, MultisigGovernanceClient<'static>) {
+fn setup(n: u32, threshold: u32) -> (Env, Vec<Address>, MultisigGovernanceClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register_contract(None, MultisigGovernance);

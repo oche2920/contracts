@@ -29,12 +29,7 @@ fn test_record_metric_basic() {
 
     assert_eq!(result, ());
 
-    let stats = client.get_statistics(
-        &symbol_short!("bp"),
-        &1699999999,
-        &1700000001,
-        &None,
-    );
+    let stats = client.get_statistics(&symbol_short!("bp"), &1699999999, &1700000001, &None);
     assert_eq!(stats.count, 1);
     assert_eq!(stats.sum, 120);
     assert_eq!(stats.average, 120);
@@ -56,12 +51,7 @@ fn test_record_metric_with_metadata_hash() {
         &Some(hash),
     );
 
-    let stats = client.get_statistics(
-        &symbol_short!("bp"),
-        &1699999999,
-        &1700000001,
-        &None,
-    );
+    let stats = client.get_statistics(&symbol_short!("bp"), &1699999999, &1700000001, &None);
     assert_eq!(stats.count, 1);
     assert_eq!(stats.sum, 130);
 }
@@ -92,12 +82,7 @@ fn test_record_multiple_metrics_same_type() {
         &None,
     );
 
-    let stats = client.get_statistics(
-        &symbol_short!("bp"),
-        &1699999999,
-        &1700002001,
-        &None,
-    );
+    let stats = client.get_statistics(&symbol_short!("bp"), &1699999999, &1700002001, &None);
     assert_eq!(stats.count, 3);
     assert_eq!(stats.sum, 360);
     assert_eq!(stats.average, 120);
@@ -124,22 +109,12 @@ fn test_record_metrics_different_types() {
         &None,
     );
 
-    let bp_stats = client.get_statistics(
-        &symbol_short!("bp"),
-        &1699999999,
-        &1700000001,
-        &None,
-    );
+    let bp_stats = client.get_statistics(&symbol_short!("bp"), &1699999999, &1700000001, &None);
     assert_eq!(bp_stats.count, 1);
     assert_eq!(bp_stats.sum, 120);
     assert_eq!(bp_stats.metric_type, symbol_short!("bp"));
 
-    let hr_stats = client.get_statistics(
-        &symbol_short!("hr"),
-        &1699999999,
-        &1700000001,
-        &None,
-    );
+    let hr_stats = client.get_statistics(&symbol_short!("hr"), &1699999999, &1700000001, &None);
     assert_eq!(hr_stats.count, 1);
     assert_eq!(hr_stats.sum, 72);
     assert_eq!(hr_stats.metric_type, symbol_short!("hr"));
@@ -164,12 +139,7 @@ fn test_record_metric_negative_values() {
         &None,
     );
 
-    let stats = client.get_statistics(
-        &symbol_short!("temp"),
-        &1699999999,
-        &1700001001,
-        &None,
-    );
+    let stats = client.get_statistics(&symbol_short!("temp"), &1699999999, &1700001001, &None);
     assert_eq!(stats.count, 2);
     assert_eq!(stats.sum, 5);
     assert_eq!(stats.average, 2);
@@ -208,12 +178,7 @@ fn test_get_statistics_time_range_filter() {
     );
 
     // Only the first two should match
-    let stats = client.get_statistics(
-        &symbol_short!("bp"),
-        &1699999999,
-        &1700050001,
-        &None,
-    );
+    let stats = client.get_statistics(&symbol_short!("bp"), &1699999999, &1700050001, &None);
     assert_eq!(stats.count, 2);
     assert_eq!(stats.sum, 260);
     assert_eq!(stats.min, 120);
@@ -302,12 +267,7 @@ fn test_get_statistics_time_and_category_filter() {
 fn test_get_statistics_invalid_time_range() {
     let (_env, client) = setup();
 
-    let result = client.try_get_statistics(
-        &symbol_short!("bp"),
-        &1700001000,
-        &1700000000,
-        &None,
-    );
+    let result = client.try_get_statistics(&symbol_short!("bp"), &1700001000, &1700000000, &None);
     assert!(result.is_err());
 }
 
@@ -315,12 +275,7 @@ fn test_get_statistics_invalid_time_range() {
 fn test_get_statistics_no_data() {
     let (_env, client) = setup();
 
-    let result = client.try_get_statistics(
-        &symbol_short!("bp"),
-        &1700000000,
-        &1700001000,
-        &None,
-    );
+    let result = client.try_get_statistics(&symbol_short!("bp"), &1700000000, &1700001000, &None);
     assert!(result.is_err());
 }
 
@@ -337,12 +292,7 @@ fn test_get_statistics_no_data_in_range() {
     );
 
     // Query a time range that doesn't include the recorded metric
-    let result = client.try_get_statistics(
-        &symbol_short!("bp"),
-        &1700100000,
-        &1700200000,
-        &None,
-    );
+    let result = client.try_get_statistics(&symbol_short!("bp"), &1700100000, &1700200000, &None);
     assert!(result.is_err());
 }
 
@@ -358,12 +308,7 @@ fn test_get_statistics_single_record() {
         &None,
     );
 
-    let stats = client.get_statistics(
-        &symbol_short!("hr"),
-        &1699999999,
-        &1700000001,
-        &None,
-    );
+    let stats = client.get_statistics(&symbol_short!("hr"), &1699999999, &1700000001, &None);
     assert_eq!(stats.count, 1);
     assert_eq!(stats.sum, 72);
     assert_eq!(stats.average, 72);
@@ -384,12 +329,7 @@ fn test_get_statistics_exact_boundary_timestamps() {
     );
 
     // Query where start_time == timestamp == end_time
-    let stats = client.get_statistics(
-        &symbol_short!("bp"),
-        &1700000000,
-        &1700000000,
-        &None,
-    );
+    let stats = client.get_statistics(&symbol_short!("bp"), &1700000000, &1700000000, &None);
     assert_eq!(stats.count, 1);
     assert_eq!(stats.sum, 120);
 }
@@ -557,12 +497,7 @@ fn test_privacy_preserving_aggregation() {
         );
     }
 
-    let stats = client.get_statistics(
-        &symbol_short!("bmi"),
-        &1699999999,
-        &1700010000,
-        &None,
-    );
+    let stats = client.get_statistics(&symbol_short!("bmi"), &1699999999, &1700010000, &None);
 
     // Verify aggregation works without individual identification
     assert_eq!(stats.count, 10);
@@ -617,30 +552,16 @@ fn test_multiple_metric_types_aggregation() {
         &None,
     );
 
-    let bp_stats = client.get_statistics(
-        &symbol_short!("bp_sys"),
-        &1699999999,
-        &1700001001,
-        &None,
-    );
+    let bp_stats = client.get_statistics(&symbol_short!("bp_sys"), &1699999999, &1700001001, &None);
     assert_eq!(bp_stats.count, 2);
     assert_eq!(bp_stats.average, 130);
 
-    let hr_stats = client.get_statistics(
-        &symbol_short!("hr"),
-        &1699999999,
-        &1700001001,
-        &None,
-    );
+    let hr_stats = client.get_statistics(&symbol_short!("hr"), &1699999999, &1700001001, &None);
     assert_eq!(hr_stats.count, 2);
     assert_eq!(hr_stats.average, 76);
 
-    let glucose_stats = client.get_statistics(
-        &symbol_short!("glucose"),
-        &1699999999,
-        &1700001001,
-        &None,
-    );
+    let glucose_stats =
+        client.get_statistics(&symbol_short!("glucose"), &1699999999, &1700001001, &None);
     assert_eq!(glucose_stats.count, 1);
     assert_eq!(glucose_stats.average, 95);
 }

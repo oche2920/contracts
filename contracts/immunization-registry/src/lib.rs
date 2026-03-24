@@ -1,20 +1,17 @@
 #![no_std]
 
-mod types;
 mod test;
+mod types;
 
-use soroban_sdk::{contract, contractimpl, Env, Address, String, Symbol, Vec, BytesN};
-use types::{DataKey, Error, VaccineRecord, AdverseEvent, VaccineSeries};
+use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol, Vec};
+use types::{AdverseEvent, DataKey, Error, VaccineRecord, VaccineSeries};
 
 #[contract]
 pub struct ImmunizationRegistry;
 
 #[contractimpl]
 impl ImmunizationRegistry {
-    pub fn record_immunization(
-        env: Env,
-        record: VaccineRecord,
-    ) -> Result<u64, Error> {
+    pub fn record_immunization(env: Env, record: VaccineRecord) -> Result<u64, Error> {
         record.provider_id.require_auth();
 
         let count: u64 = env
@@ -23,9 +20,13 @@ impl ImmunizationRegistry {
             .get(&DataKey::ImmunizationCounter)
             .unwrap_or(0);
         let new_id = count + 1;
-        env.storage().instance().set(&DataKey::ImmunizationCounter, &new_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::ImmunizationCounter, &new_id);
 
-        env.storage().persistent().set(&DataKey::ImmunizationRecord(new_id), &record);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ImmunizationRecord(new_id), &record);
 
         let mut patient_records: Vec<u64> = env
             .storage()
@@ -33,9 +34,10 @@ impl ImmunizationRegistry {
             .get(&DataKey::PatientImmunizations(record.patient_id.clone()))
             .unwrap_or(Vec::new(&env));
         patient_records.push_back(new_id);
-        env.storage()
-            .persistent()
-            .set(&DataKey::PatientImmunizations(record.patient_id.clone()), &patient_records);
+        env.storage().persistent().set(
+            &DataKey::PatientImmunizations(record.patient_id.clone()),
+            &patient_records,
+        );
 
         Ok(new_id)
     }
@@ -50,7 +52,11 @@ impl ImmunizationRegistry {
     ) -> Result<(), Error> {
         reporter.require_auth();
 
-        if !env.storage().persistent().has(&DataKey::ImmunizationRecord(immunization_id)) {
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::ImmunizationRecord(immunization_id))
+        {
             return Err(Error::RecordNotFound);
         }
 
@@ -89,7 +95,11 @@ impl ImmunizationRegistry {
 
         let mut history: Vec<VaccineRecord> = Vec::new(&env);
         for id in record_ids {
-            if let Some(record) = env.storage().persistent().get(&DataKey::ImmunizationRecord(id)) {
+            if let Some(record) = env
+                .storage()
+                .persistent()
+                .get(&DataKey::ImmunizationRecord(id))
+            {
                 history.push_back(record);
             }
         }
@@ -161,7 +171,11 @@ impl ImmunizationRegistry {
             // Let's assume series_name matches vaccine_name for this heuristic:
             let mut administered_doses = 0;
             for id in record_ids.clone() {
-                if let Some(record) = env.storage().persistent().get::<DataKey, VaccineRecord>(&DataKey::ImmunizationRecord(id)) {
+                if let Some(record) = env
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, VaccineRecord>(&DataKey::ImmunizationRecord(id))
+                {
                     if record.vaccine_name == series.series_name {
                         administered_doses += 1;
                     }

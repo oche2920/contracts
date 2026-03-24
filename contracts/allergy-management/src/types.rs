@@ -30,7 +30,7 @@ pub struct AllergyRecord {
     pub allergen: String,
     pub allergen_type: Symbol, // "med" (medication), "food", "env" (environmental)
     pub reaction_type: Vec<String>, // e.g., ["rash", "anaphylaxis", "hives"]
-    pub severity: Symbol, // "mild", "moderate", "severe", "critical"
+    pub severity: Symbol,      // "mild", "moderate", "severe", "critical"
     pub onset_date: Option<u64>,
     pub recorded_date: u64,
     pub verified: bool,
@@ -70,6 +70,6 @@ pub enum DataKey {
     AllergyCounter,
     Allergy(u64),
     PatientAllergies(Address),
-    AccessControl(Address, Address), // (patient, provider)
+    AccessControl(Address, Address),  // (patient, provider)
     CrossSensitivity(String, String), // (allergen1, allergen2)
 }

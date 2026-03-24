@@ -1,6 +1,4 @@
-#![no_std]
-
-use soroban_sdk::{contracterror, contracttype, Address, String, Symbol, BytesN};
+use soroban_sdk::{contracterror, contracttype, Address, BytesN, String, Symbol};
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -8,7 +6,7 @@ pub enum DataKey {
     ImmunizationCounter,
     PatientImmunizations(Address), // List of IDs (u64)
     ImmunizationRecord(u64),
-    AdverseEvents(u64), // List of AdverseEvent
+    AdverseEvents(u64),            // List of AdverseEvent
     PatientVaccineSeries(Address), // List of VaccineSeries
 }
 

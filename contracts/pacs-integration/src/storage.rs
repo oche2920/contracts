@@ -1,7 +1,7 @@
-use soroban_sdk::{Address, Env, String, Vec};
 use crate::types::{
     AccessGrant, CdRecord, DataKey, ImagingReport, ImagingStudy, QcReview, SeriesInfo, ViewRecord,
 };
+use soroban_sdk::{Address, Env, String, Vec};
 
 const BUMP_AMOUNT: u32 = 518400; // ~60 days in ledgers (assuming 5s ledger)
 const BUMP_THRESHOLD: u32 = 259200; // ~30 days
@@ -63,6 +63,7 @@ pub fn save_report(env: &Env, report: &ImagingReport) {
         .extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
 }
 
+#[allow(dead_code)]
 pub fn load_report(env: &Env, study_id: u64) -> Option<ImagingReport> {
     env.storage().persistent().get(&DataKey::Report(study_id))
 }

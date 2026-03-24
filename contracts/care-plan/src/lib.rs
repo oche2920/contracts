@@ -1,4 +1,6 @@
 #![no_std]
+#![allow(deprecated)]
+#![allow(clippy::too_many_arguments)]
 
 mod storage;
 mod types;
@@ -93,10 +95,8 @@ impl CarePlanContract {
         save_goal(&env, &goal);
         add_plan_goal(&env, care_plan_id, goal_id);
 
-        env.events().publish(
-            (Symbol::new(&env, "goal_added"),),
-            (care_plan_id, goal_id),
-        );
+        env.events()
+            .publish((Symbol::new(&env, "goal_added"),), (care_plan_id, goal_id));
 
         Ok(goal_id)
     }
@@ -355,8 +355,7 @@ impl CarePlanContract {
         // Update the parent care plan's last/next review dates
         if let Some(mut plan) = load_care_plan(&env, review.care_plan_id) {
             plan.last_review_date = Some(conducted_at);
-            plan.next_review_date =
-                conducted_at + (plan.review_frequency_days as u64 * 86_400);
+            plan.next_review_date = conducted_at + (plan.review_frequency_days as u64 * 86_400);
 
             if !continue_plan {
                 plan.status = CarePlanStatus::Completed;

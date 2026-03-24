@@ -1,4 +1,6 @@
 #![no_std]
+#![allow(deprecated)]
+#![allow(clippy::too_many_arguments)]
 
 mod storage;
 mod types;

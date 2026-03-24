@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(deprecated)]
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String,
@@ -106,8 +107,10 @@ impl ProviderRegistry {
         env.storage()
             .persistent()
             .set(&DataKey::Record(record_id.clone()), &data);
-        env.events()
-            .publish((symbol_short!("add_rec"), provider, record_id), symbol_short!("ok"));
+        env.events().publish(
+            (symbol_short!("add_rec"), provider, record_id),
+            symbol_short!("ok"),
+        );
         Ok(())
     }
 
@@ -135,7 +138,8 @@ impl ProviderRegistry {
 
     /// Per-provider counter with window start; resets when ledger time passes the window.
     fn consume_provider_rate_slot(env: &Env, provider: &Address) -> Result<(), ContractError> {
-        let config_opt: Option<RateLimitConfig> = env.storage().instance().get(&DataKey::RateLimitConfig);
+        let config_opt: Option<RateLimitConfig> =
+            env.storage().instance().get(&DataKey::RateLimitConfig);
         let Some(config) = config_opt else {
             return Ok(());
         };
@@ -145,12 +149,14 @@ impl ProviderRegistry {
 
         let now = env.ledger().timestamp();
         let key = DataKey::ProviderRate(provider.clone());
-        let mut state: ProviderRateWindow = env.storage().persistent().get(&key).unwrap_or(
-            ProviderRateWindow {
-                count: 0,
-                window_start: 0,
-            },
-        );
+        let mut state: ProviderRateWindow =
+            env.storage()
+                .persistent()
+                .get(&key)
+                .unwrap_or(ProviderRateWindow {
+                    count: 0,
+                    window_start: 0,
+                });
 
         let window_end = state.window_start.saturating_add(config.window_seconds);
         if state.window_start == 0 || now >= window_end {

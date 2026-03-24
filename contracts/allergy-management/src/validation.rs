@@ -6,10 +6,10 @@ use crate::{storage, Error};
 pub fn validate_allergen_type(allergen_type: &Symbol) -> Result<(), Error> {
     let valid_types = [
         symbol_short!("med"),  // medication
-        symbol_short!("food"),  // food
-        symbol_short!("env"),   // environmental
+        symbol_short!("food"), // food
+        symbol_short!("env"),  // environmental
     ];
-    
+
     if valid_types.contains(allergen_type) {
         Ok(())
     } else {
@@ -25,7 +25,7 @@ pub fn validate_severity(severity: &Symbol) -> Result<(), Error> {
         symbol_short!("severe"),
         symbol_short!("critical"),
     ];
-    
+
     if valid_severities.contains(severity) {
         Ok(())
     } else {

@@ -1,9 +1,7 @@
-#![no_std]
-
 use soroban_sdk::{Address, Env, Vec};
 
 use crate::types::{
-    Barrier, CarePlan, CareReview, CareTeamMember, CareGoal, DataKey, Intervention,
+    Barrier, CareGoal, CarePlan, CareReview, CareTeamMember, DataKey, Intervention,
 };
 
 // -----------------------------------------------------------------------
@@ -30,9 +28,7 @@ pub fn next_goal_id(env: &Env) -> u64 {
         .get(&DataKey::GoalCounter)
         .unwrap_or(0);
     let next = id + 1;
-    env.storage()
-        .persistent()
-        .set(&DataKey::GoalCounter, &next);
+    env.storage().persistent().set(&DataKey::GoalCounter, &next);
     next
 }
 
@@ -141,9 +137,10 @@ pub fn load_plan_goals(env: &Env, care_plan_id: u64) -> Vec<u64> {
 // -----------------------------------------------------------------------
 
 pub fn save_intervention(env: &Env, intervention: &Intervention) {
-    env.storage()
-        .persistent()
-        .set(&DataKey::Intervention(intervention.intervention_id), intervention);
+    env.storage().persistent().set(
+        &DataKey::Intervention(intervention.intervention_id),
+        intervention,
+    );
 }
 
 pub fn load_intervention(env: &Env, intervention_id: u64) -> Option<Intervention> {
@@ -225,9 +222,7 @@ pub fn save_review(env: &Env, review: &CareReview) {
 }
 
 pub fn load_review(env: &Env, review_id: u64) -> Option<CareReview> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::Review(review_id))
+    env.storage().persistent().get(&DataKey::Review(review_id))
 }
 
 pub fn add_plan_review(env: &Env, care_plan_id: u64, review_id: u64) {

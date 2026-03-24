@@ -9,11 +9,11 @@ pub fn get_next_allergy_id(env: &Env) -> u64 {
         .instance()
         .get::<DataKey, u64>(&DataKey::AllergyCounter)
         .unwrap_or(0);
-    
+
     env.storage()
         .instance()
         .set(&DataKey::AllergyCounter, &(current_id + 1));
-    
+
     current_id
 }
 
@@ -40,7 +40,7 @@ pub fn add_patient_allergy(env: &Env, patient_id: &Address, allergy_id: u64) {
         .persistent()
         .get(&key)
         .unwrap_or(Vec::new(env));
-    
+
     allergies.push_back(allergy_id);
     env.storage().persistent().set(&key, &allergies);
 }
@@ -62,17 +62,18 @@ pub fn check_duplicate_allergy(
     allergen_type: &Symbol,
 ) -> bool {
     let allergy_ids = get_patient_allergies(env, patient_id);
-    
+
     for allergy_id in allergy_ids.iter() {
         if let Ok(allergy) = get_allergy(env, allergy_id) {
-            if allergy.allergen == *allergen 
-                && allergy.allergen_type == *allergen_type 
-                && allergy.status == crate::AllergyStatus::Active {
+            if allergy.allergen == *allergen
+                && allergy.allergen_type == *allergen_type
+                && allergy.status == crate::AllergyStatus::Active
+            {
                 return true;
             }
         }
     }
-    
+
     false
 }
 
@@ -94,14 +95,18 @@ pub fn check_access_permission(env: &Env, patient_id: &Address, requester: &Addr
     if patient_id == requester {
         return true;
     }
-    
+
     // Check if admin
-    if let Some(admin) = env.storage().instance().get::<DataKey, Address>(&DataKey::Admin) {
+    if let Some(admin) = env
+        .storage()
+        .instance()
+        .get::<DataKey, Address>(&DataKey::Admin)
+    {
         if &admin == requester {
             return true;
         }
     }
-    
+
     // Check explicit access grant
     let key = DataKey::AccessControl(patient_id.clone(), requester.clone());
     env.storage().persistent().has(&key)
@@ -111,7 +116,7 @@ pub fn check_access_permission(env: &Env, patient_id: &Address, requester: &Addr
 pub fn add_cross_sensitivity(env: &Env, allergen1: &String, allergen2: &String) {
     let key1 = DataKey::CrossSensitivity(allergen1.clone(), allergen2.clone());
     let key2 = DataKey::CrossSensitivity(allergen2.clone(), allergen1.clone());
-    
+
     env.storage().persistent().set(&key1, &true);
     env.storage().persistent().set(&key2, &true);
 }

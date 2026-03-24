@@ -1,4 +1,6 @@
 #![no_std]
+#![allow(deprecated)]
+#![allow(clippy::too_many_arguments)]
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String,
@@ -140,10 +142,10 @@ impl AllergyTrackingContract {
 
         // Validate allergen name
         Self::validate_allergen(&allergen)?;
-        
+
         // Validate reaction types
         Self::validate_reaction_types(&reaction_types)?;
-        
+
         // Validate timestamp
         Self::validate_timestamp(&env, onset_date)?;
 
@@ -227,10 +229,8 @@ impl AllergyTrackingContract {
             .set(&DataKey::AllergyCounter, &(allergy_id + 1));
 
         // Emit event
-        env.events().publish(
-            (symbol_short!("allergy"), patient_id, allergy_id),
-            allergen,
-        );
+        env.events()
+            .publish((symbol_short!("allergy"), patient_id, allergy_id), allergen);
 
         Ok(allergy_id)
     }
@@ -311,7 +311,7 @@ impl AllergyTrackingContract {
 
         // Validate reason length
         Self::validate_reason(&resolution_reason)?;
-        
+
         // Validate resolution date
         if resolution_date == 0 || resolution_date > env.ledger().timestamp() {
             return Err(Error::InvalidTimestamp);
@@ -339,10 +339,8 @@ impl AllergyTrackingContract {
         env.storage().persistent().set(&allergy_key, &allergy);
 
         // Emit event
-        env.events().publish(
-            (symbol_short!("resolved"), allergy_id),
-            resolution_reason,
-        );
+        env.events()
+            .publish((symbol_short!("resolved"), allergy_id), resolution_reason);
 
         Ok(())
     }
@@ -543,7 +541,7 @@ impl AllergyTrackingContract {
             .persistent()
             .get(&key1)
             .unwrap_or(Vec::new(&env));
-        
+
         if !Self::vec_contains(&related1, &drug2) {
             related1.push_back(drug2.clone());
             env.storage().persistent().set(&key1, &related1);
@@ -555,7 +553,7 @@ impl AllergyTrackingContract {
             .persistent()
             .get(&key2)
             .unwrap_or(Vec::new(&env));
-        
+
         if !Self::vec_contains(&related2, &drug1) {
             related2.push_back(drug1);
             env.storage().persistent().set(&key2, &related2);

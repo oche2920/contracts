@@ -261,19 +261,21 @@ fn test_isolation_and_active_lookup() {
     let (env, client) = setup();
     let patient = Address::generate(&env);
 
-    let id = client
-        .track_isolation_precaution(
-            &patient,
-            &Symbol::new(&env, "contact"),
-            &1_799_990_000,
-            &String::from_str(&env, "MRSA colonization"),
-            &String::from_str(&env, "3 negative cultures"),
-        );
+    let id = client.track_isolation_precaution(
+        &patient,
+        &Symbol::new(&env, "contact"),
+        &1_799_990_000,
+        &String::from_str(&env, "MRSA colonization"),
+        &String::from_str(&env, "3 negative cultures"),
+    );
     assert_eq!(id, 1);
 
     let active = client.get_active_isolations(&patient);
     assert_eq!(active.len(), 1);
-    assert_eq!(active.get(0).unwrap().precaution_type, Symbol::new(&env, "contact"));
+    assert_eq!(
+        active.get(0).unwrap().precaution_type,
+        Symbol::new(&env, "contact")
+    );
 }
 
 #[test]

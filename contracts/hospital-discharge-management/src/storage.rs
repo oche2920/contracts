@@ -43,7 +43,9 @@ pub fn get_discharge_plan(env: &Env, plan_id: u64) -> Result<DischargePlan, Erro
 
 // Readiness Assessment storage
 pub fn save_readiness_assessment(env: &Env, plan_id: u64, assessment: &ReadinessScore) {
-    env.storage().persistent().set(&(ASSESS, plan_id), assessment);
+    env.storage()
+        .persistent()
+        .set(&(ASSESS, plan_id), assessment);
 }
 
 pub fn get_readiness_assessment(env: &Env, plan_id: u64) -> Result<ReadinessScore, Error> {
@@ -89,7 +91,9 @@ pub fn save_discharge_education(env: &Env, plan_id: u64, education: &DischargeEd
 
 // SNF Coordination storage
 pub fn save_snf_coordination(env: &Env, plan_id: u64, coordination: &SNFCoordination) {
-    env.storage().persistent().set(&(SNF, plan_id), coordination);
+    env.storage()
+        .persistent()
+        .set(&(SNF, plan_id), coordination);
 }
 
 // Discharge Completion storage

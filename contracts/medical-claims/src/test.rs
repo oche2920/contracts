@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, Address, Env, String, BytesN, Vec};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Vec};
 
 #[test]
 fn test_full_claim_lifecycle() {
@@ -28,10 +28,10 @@ fn test_full_claim_lifecycle() {
     let claim_id = client.submit_claim(
         &provider_id,
         &patient_id,
-        &12345, // policy
+        &12345,      // policy
         &1690000000, // date
         &services,
-        &Vec::new(&env), // diagnoses
+        &Vec::new(&env),                     // diagnoses
         &BytesN::from_array(&env, &[0; 32]), // hash
         &15000,
     );
@@ -40,14 +40,14 @@ fn test_full_claim_lifecycle() {
     // 2. Adjudicate Claim
     let mut approved_lines = Vec::new(&env);
     approved_lines.push_back(1);
-    
+
     client.adjudicate_claim(
         &claim_id,
         &insurance_admin,
         &approved_lines,
         &Vec::new(&env), // no denials
-        &10000, // Approved $100.00
-        &2000,  // Patient owes $20.00
+        &10000,          // Approved $100.00
+        &2000,           // Patient owes $20.00
     );
 
     // 3. Process Insurance Payment
@@ -60,12 +60,7 @@ fn test_full_claim_lifecycle() {
     );
 
     // 4. Apply Patient Payment
-    client.apply_patient_payment(
-        &claim_id,
-        &patient_id,
-        &2000,
-        &1690200000,
-    );
+    client.apply_patient_payment(&claim_id, &patient_id, &2000, &1690200000);
 
     // State cannot be verified directly without getters, but operations shouldn't panic.
     // If we try to appeal a Paid claim, it should fail
@@ -124,7 +119,7 @@ fn test_appeal_workflow() {
         &insurance_admin,
         &Vec::new(&env), // none approved
         &denials,
-        &0, 
+        &0,
         &0,
     );
 
@@ -149,9 +144,9 @@ fn test_appeal_workflow() {
     client.adjudicate_claim(
         &claim_id,
         &insurance_admin,
-        &Vec::new(&env), 
+        &Vec::new(&env),
         &denials,
-        &0, 
+        &0,
         &0,
     );
 
@@ -162,14 +157,14 @@ fn test_appeal_workflow() {
         &2,
         &BytesN::from_array(&env, &[3; 32]),
     );
-    
+
     // Re-adjudicate
     client.adjudicate_claim(
         &claim_id,
         &insurance_admin,
-        &Vec::new(&env), 
+        &Vec::new(&env),
         &denials,
-        &0, 
+        &0,
         &0,
     );
 

@@ -165,8 +165,8 @@ impl TelemedicineContract {
 
     pub fn verify_telemedicine_eligibility(
         env: Env,
-        patient_id: Address,  // Unused in this mock, but present in signature
-        provider_id: Address, // Unused in this mock, but present in signature
+        _patient_id: Address,  // Unused in this mock, but present in signature
+        _provider_id: Address, // Unused in this mock, but present in signature
         patient_state: String,
         provider_state: String,
     ) -> Result<EligibilityResult, Error> {

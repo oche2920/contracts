@@ -1,6 +1,7 @@
 #![no_std]
+#![allow(deprecated)]
 
-use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Symbol, Vec, String};
+use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol, Vec};
 
 mod storage;
 mod types;
@@ -9,8 +10,8 @@ mod validation;
 #[cfg(test)]
 mod test;
 
-use types::*;
 use storage::*;
+use types::*;
 use validation::*;
 
 #[contract]
@@ -138,10 +139,8 @@ impl HospitalDischargeContract {
         save_discharge_orders(&env, discharge_plan_id, &orders);
 
         // Emit event
-        env.events().publish(
-            (Symbol::new(&env, "orders_created"),),
-            discharge_plan_id,
-        );
+        env.events()
+            .publish((Symbol::new(&env, "orders_created"),), discharge_plan_id);
 
         Ok(())
     }

@@ -9,7 +9,7 @@ use soroban_sdk::{
 fn create_test_env() -> (Env, Address, Address, Address, Address) {
     let env = Env::default();
     env.mock_all_auths();
-    
+
     // Set ledger timestamp to a reasonable value for testing
     env.ledger().with_mut(|li| {
         li.timestamp = 10000; // Set to 10000 so test timestamps work
@@ -534,7 +534,6 @@ fn test_comprehensive_workflow() {
     let history = client.get_severity_history(&allergy_id);
     assert_eq!(history.len(), 1);
 }
-
 
 // ==================== NEW VALIDATION TESTS ====================
 

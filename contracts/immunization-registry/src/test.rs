@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, Address, Env, String, Symbol, BytesN};
+use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol};
 
 #[test]
 fn test_record_immunization() {
@@ -32,7 +32,7 @@ fn test_record_immunization() {
 
     let requester = Address::generate(&env);
     let history = client.get_immunization_history(&patient_id, &requester);
-    
+
     assert_eq!(history.len(), 1);
     let record = history.get(0).unwrap();
     assert_eq!(record.patient_id, patient_id);

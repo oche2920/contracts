@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(clippy::too_many_arguments)]
 
 use soroban_sdk::{
     contract, contractimpl, contracttype, Address, BytesN, Env, String, Symbol, Vec,
@@ -181,7 +182,7 @@ impl From<&Error> for soroban_sdk::Error {
 
 impl TryFrom<soroban_sdk::Error> for Error {
     type Error = soroban_sdk::Error;
-    
+
     fn try_from(value: soroban_sdk::Error) -> Result<Self, Self::Error> {
         Err(value)
     }
@@ -336,12 +337,10 @@ impl RehabilitationServicesContract {
             .unwrap_or(Vec::new(&env));
 
         assessments.push_back(assessment);
-        env.storage()
-            .instance()
-            .set(
-                &DataKey::BalanceMobilityAssessments(evaluation_id),
-                &assessments,
-            );
+        env.storage().instance().set(
+            &DataKey::BalanceMobilityAssessments(evaluation_id),
+            &assessments,
+        );
 
         Ok(())
     }
@@ -676,14 +675,20 @@ impl RehabilitationServicesContract {
             .unwrap_or(Vec::new(&env))
     }
 
-    pub fn get_discharge_record(env: Env, treatment_plan_id: u64) -> Result<DischargeRecord, Error> {
+    pub fn get_discharge_record(
+        env: Env,
+        treatment_plan_id: u64,
+    ) -> Result<DischargeRecord, Error> {
         env.storage()
             .instance()
             .get(&DataKey::Discharge(treatment_plan_id))
             .ok_or(Error::NotFound)
     }
 
-    pub fn get_balance_mobility_assessments(env: Env, evaluation_id: u64) -> Vec<BalanceMobilityAssessment> {
+    pub fn get_balance_mobility_assessments(
+        env: Env,
+        evaluation_id: u64,
+    ) -> Vec<BalanceMobilityAssessment> {
         env.storage()
             .instance()
             .get(&DataKey::BalanceMobilityAssessments(evaluation_id))
