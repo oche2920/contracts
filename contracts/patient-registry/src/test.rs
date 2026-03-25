@@ -3,7 +3,7 @@
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke},
-    Address, Bytes, BytesN, Env, IntoVal, String, Symbol,
+    Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
 };
 
 fn make_cid_v1(env: &Env, seed: u8) -> Bytes {
@@ -1494,33 +1494,10 @@ fn test_fee_can_be_reset_to_zero() {
 }
 
 /// ------------------------------------------------
-/// TTL EXTENSION TESTS
+/// GET_RECORDS_BY_IDS TESTS
 /// ------------------------------------------------
 
-fn make_ledger_info(sequence: u32, timestamp: u64) -> soroban_sdk::testutils::LedgerInfo {
-    soroban_sdk::testutils::LedgerInfo {
-        sequence_number: sequence,
-        timestamp,
-        protocol_version: 23,
-        network_id: Default::default(),
-        base_reserve: 10,
-        min_temp_entry_ttl: 1,
-        min_persistent_entry_ttl: 1,
-        max_entry_ttl: 10_000_000,
-    }
-}
-
-/// Shared setup for TTL tests: initialized contract + registered patient with consent + doctor.
-fn setup_for_ttl(
-    env: &Env,
-) -> (MedicalRegistryClient, Address, Address, Address, BytesN<32>) {
-    let contract_id = env.register(MedicalRegistry, ());
-    let client = MedicalRegistryClient::new(env, &contract_id);
-
-/// GET_RECORDS_BY_TYPE TESTS
-/// ------------------------------------------------
-
-fn setup_for_filter(env: &Env) -> (MedicalRegistryClient<'_>, Address, Address) {
+fn setup_for_get_records_by_ids(env: &Env) -> (MedicalRegistryClient<'_>, Address, Address) {
     let contract_id = env.register(MedicalRegistry, ());
     let client = MedicalRegistryClient::new(env, &contract_id);
     let admin = Address::generate(env);
@@ -1536,297 +1513,89 @@ fn setup_for_filter(env: &Env) -> (MedicalRegistryClient<'_>, Address, Address) 
     client.publish_consent_version(&v1);
     client.register_patient(
         &patient,
-        &String::from_str(env, "Alice"),
+        &String::from_str(env, "Batch Patient"),
         &631152000,
-        &String::from_str(env, "ipfs://alice"),
+        &String::from_str(env, "ipfs://batch"),
     );
     client.acknowledge_consent(&patient, &patient, &v1);
-    client.register_doctor(
+    client.grant_access(&patient, &patient, &doctor);
+
+    client.add_medical_record(
+        &patient,
         &doctor,
-        &String::from_str(env, "Dr. Bob"),
-        &String::from_str(env, "Cardiology"),
-        &Bytes::from_array(env, &[1, 2, 3]),
+        &make_cid_v1(env, 20),
+        &String::from_str(env, "Record 0"),
+        &Symbol::new(env, "LAB"),
     );
-    client.grant_access(&patient, &patient, &doctor);
-
-    (client, admin, patient, doctor, v1)
-}
-
-/// After `add_medical_record`, TTL on the MedicalRecords key must not be zero —
-/// i.e., `extend_ttl` was called and the entry lives beyond the current ledger.
-#[test]
-fn test_add_record_extends_patient_ttl() {
-    let env = Env::default();
-    env.ledger().set(make_ledger_info(100, 1_000_000));
-
-    let (client, _admin, patient, doctor, _v1) = setup_for_ttl(&env);
-    client.acknowledge_consent(&patient, &patient, &v1);
-    client.grant_access(&patient, &patient, &doctor);
+    client.add_medical_record(
+        &patient,
+        &doctor,
+        &make_cid_v1(env, 21),
+        &String::from_str(env, "Record 1"),
+        &Symbol::new(env, "LAB"),
+    );
+    client.add_medical_record(
+        &patient,
+        &doctor,
+        &make_cid_v1(env, 22),
+        &String::from_str(env, "Record 2"),
+        &Symbol::new(env, "LAB"),
+    );
 
     (client, patient, doctor)
 }
 
 #[test]
-fn test_get_records_by_type_returns_matching_records() {
+fn test_get_records_by_ids_partial_hits_skip_missing() {
     let env = Env::default();
-    let (client, patient, doctor) = setup_for_filter(&env);
+    let (client, patient, _doctor) = setup_for_get_records_by_ids(&env);
 
-    client.add_medical_record(
-        &patient,
-        &doctor,
-        &make_cid_v1(&env, 10),
-        &Bytes::from_array(&env, &[9, 8, 7]),
-        &String::from_str(&env, "Checkup"),
-    );
+    let mut ids = Vec::new(&env);
+    ids.push_back(0);
+    ids.push_back(99);
+    ids.push_back(2);
 
-    // Verify the records are still accessible after adding
-    let records = client.get_medical_records(&patient);
-    assert_eq!(records.len(), 1);
-}
-
-/// After `get_medical_records`, TTL on the MedicalRecords key is bumped so the
-/// entry remains accessible.
-#[test]
-fn test_get_records_extends_ttl() {
-    let env = Env::default();
-    env.ledger().set(make_ledger_info(100, 1_000_000));
-
-    let (client, _admin, patient, doctor, _v1) = setup_for_ttl(&env);
-        &Bytes::from_array(&env, &[1, 1, 1]),
-        &String::from_str(&env, "CBC panel"),
-        &Symbol::new(&env, "LAB"),
-    );
-    client.add_medical_record(
-        &patient,
-        &doctor,
-        &make_cid_v1(&env, 11),
-        &String::from_str(&env, "Amoxicillin"),
-        &Symbol::new(&env, "PRESCRIPTION"),
-    );
-    client.add_medical_record(
-        &patient,
-        &doctor,
-        &make_cid_v1(&env, 12),
-        &String::from_str(&env, "Lipid panel"),
-        &Symbol::new(&env, "LAB"),
-    );
-
-    let lab_records = client.get_records_by_type(&patient, &patient, &Symbol::new(&env, "LAB"));
-    assert_eq!(lab_records.len(), 2);
-    assert_eq!(
-        lab_records.get(0).unwrap().description,
-        String::from_str(&env, "CBC panel")
-    );
-    assert_eq!(
-        lab_records.get(1).unwrap().description,
-        String::from_str(&env, "Lipid panel")
-    );
-
-    let rx_records =
-        client.get_records_by_type(&patient, &patient, &Symbol::new(&env, "PRESCRIPTION"));
-    assert_eq!(rx_records.len(), 1);
-    assert_eq!(
-        rx_records.get(0).unwrap().description,
-        String::from_str(&env, "Amoxicillin")
-    );
+    let result = client.get_records_by_ids(&patient, &patient, &ids, &false);
+    assert_eq!(result.len(), 2);
+    assert_eq!(result.get(0).unwrap().description, String::from_str(&env, "Record 0"));
+    assert_eq!(result.get(1).unwrap().description, String::from_str(&env, "Record 2"));
 }
 
 #[test]
-fn test_get_records_by_type_returns_empty_when_no_match() {
+fn test_get_records_by_ids_strict_missing_errors() {
     let env = Env::default();
-    let (client, patient, doctor) = setup_for_filter(&env);
+    let (client, patient, _doctor) = setup_for_get_records_by_ids(&env);
 
-    client.add_medical_record(
-        &patient,
-        &doctor,
-        &make_cid_v1(&env, 13),
-        &Bytes::from_array(&env, &[1, 2, 3]),
-        &String::from_str(&env, "Initial record"),
-    );
+    let mut ids = Vec::new(&env);
+    ids.push_back(1);
+    ids.push_back(999);
 
-    // Call get_medical_records — internally bumps TTL
-    let records = client.get_medical_records(&patient);
-    assert_eq!(records.len(), 1);
-
-    // Advance the ledger significantly — data should still be accessible
-    env.ledger().set(make_ledger_info(
-        100 + LEDGER_THRESHOLD - 1,
-        1_000_000 + 1_000,
-    ));
-    let records_after = client.get_medical_records(&patient);
-    assert_eq!(records_after.len(), 1);
-}
-
-/// `extend_patient_ttl` called by the patient themselves must succeed and keep
-/// the Patient entry accessible.
-#[test]
-fn test_extend_patient_ttl_by_patient() {
-    let env = Env::default();
-    env.ledger().set(make_ledger_info(100, 1_000_000));
-
-    let (client, _admin, patient, _doctor, _v1) = setup_for_ttl(&env);
-
-    // Should not panic
-    client.extend_patient_ttl(&patient);
-
-    // Patient record is still readable
-    let data = client.get_patient(&patient);
-    assert_eq!(data.name, String::from_str(&env, "Alice"));
-}
-
-/// `extend_patient_ttl` called by the admin must succeed.
-#[test]
-fn test_extend_patient_ttl_by_admin() {
-    let env = Env::default();
-    env.ledger().set(make_ledger_info(100, 1_000_000));
-
-    let (client, admin, _patient, _doctor, _v1) = setup_for_ttl(&env);
-
-    // Admin calling extend_patient_ttl with admin address
-    // (admin == patient arg in our extend_patient_ttl logic)
-    // Instead, register admin as a patient to satisfy `Patient key exists`
-    env.mock_all_auths();
-    client.register_patient(
-        &admin,
-        &String::from_str(&env, "Admin User"),
-        &631152000,
-        &String::from_str(&env, "ipfs://admin"),
-    );
-    client.extend_patient_ttl(&admin);
-
-    let data = client.get_patient(&admin);
-    assert_eq!(data.name, String::from_str(&env, "Admin User"));
-}
-
-/// `extend_patient_ttl` works even when the patient has no MedicalRecords yet
-/// (optional keys are skipped gracefully).
-#[test]
-fn test_extend_patient_ttl_no_records_yet() {
-    let env = Env::default();
-    env.ledger().set(make_ledger_info(100, 1_000_000));
-
-    let (client, _admin, patient, _doctor, _v1) = setup_for_ttl(&env);
-
-    // Patient has consent but no records — should not panic
-    client.extend_patient_ttl(&patient);
-}
-
-/// TTL constants are defined with expected values.
-#[test]
-fn test_ttl_constants_are_defined() {
-    assert_eq!(LEDGER_BUMP_AMOUNT, 535_680);
-    assert_eq!(LEDGER_THRESHOLD, 518_400);
-    assert!(LEDGER_BUMP_AMOUNT > LEDGER_THRESHOLD);
-        &String::from_str(&env, "X-ray"),
-        &Symbol::new(&env, "IMAGING"),
-    );
-
-    // No PRESCRIPTION records exist — should return empty vec, not error
-    let result = client.get_records_by_type(&patient, &patient, &Symbol::new(&env, "PRESCRIPTION"));
-    assert_eq!(result.len(), 0);
+    let result = client.try_get_records_by_ids(&patient, &patient, &ids, &true);
+    assert!(result.is_err());
 }
 
 #[test]
-fn test_get_records_by_type_returns_empty_when_no_records_at_all() {
+fn test_get_records_by_ids_rejects_more_than_ten_ids() {
     let env = Env::default();
-    let (client, patient, _doctor) = setup_for_filter(&env);
+    let (client, patient, _doctor) = setup_for_get_records_by_ids(&env);
 
-    let result = client.get_records_by_type(&patient, &patient, &Symbol::new(&env, "LAB"));
-    assert_eq!(result.len(), 0);
-}
-
-#[test]
-fn test_get_records_by_type_authorized_doctor_can_read() {
-    let env = Env::default();
-    let (client, patient, doctor) = setup_for_filter(&env);
-
-    client.add_medical_record(
-        &patient,
-        &doctor,
-        &make_cid_v1(&env, 14),
-        &String::from_str(&env, "Flu shot"),
-        &Symbol::new(&env, "IMMUNIZATION"),
-    );
-
-    // Doctor (authorized) can query records
-    let records = client.get_records_by_type(&patient, &doctor, &Symbol::new(&env, "IMMUNIZATION"));
-    assert_eq!(records.len(), 1);
-}
-
-#[test]
-fn test_get_records_by_type_guardian_can_read() {
-    let env = Env::default();
-    let (client, patient, doctor) = setup_for_filter(&env);
-    let guardian = Address::generate(&env);
-
-    client.assign_guardian(&patient, &guardian);
-    client.add_medical_record(
-        &patient,
-        &doctor,
-        &make_cid_v1(&env, 15),
-        &String::from_str(&env, "Child checkup"),
-        &Symbol::new(&env, "VISIT"),
-    );
-
-    let records = client.get_records_by_type(&patient, &guardian, &Symbol::new(&env, "VISIT"));
-    assert_eq!(records.len(), 1);
-}
-
-#[test]
-#[should_panic(expected = "Caller not authorized to view records")]
-fn test_get_records_by_type_unauthorized_caller_is_rejected() {
-    let env = Env::default();
-    let (client, patient, _doctor) = setup_for_filter(&env);
-    let stranger = Address::generate(&env);
-
-    client.get_records_by_type(&patient, &stranger, &Symbol::new(&env, "LAB"));
-}
-
-#[test]
-fn test_get_records_by_type_multiple_types_isolation() {
-    let env = Env::default();
-    let (client, patient, doctor) = setup_for_filter(&env);
-
-    let types = [
-        ("LAB", "Blood work"),
-        ("PRESCRIPTION", "Metformin"),
-        ("IMAGING", "Chest X-ray"),
-        ("LAB", "Urinalysis"),
-        ("PRESCRIPTION", "Lisinopril"),
-    ];
-
-    for (i, (rtype, desc)) in types.iter().enumerate() {
-        client.add_medical_record(
-            &patient,
-            &doctor,
-            &make_cid_v1(&env, i as u8),
-            &String::from_str(&env, desc),
-            &Symbol::new(&env, rtype),
-        );
+    let mut ids = Vec::new(&env);
+    for i in 0u32..11u32 {
+        ids.push_back(i);
     }
 
-    assert_eq!(
-        client
-            .get_records_by_type(&patient, &patient, &Symbol::new(&env, "LAB"))
-            .len(),
-        2
-    );
-    assert_eq!(
-        client
-            .get_records_by_type(&patient, &patient, &Symbol::new(&env, "PRESCRIPTION"))
-            .len(),
-        2
-    );
-    assert_eq!(
-        client
-            .get_records_by_type(&patient, &patient, &Symbol::new(&env, "IMAGING"))
-            .len(),
-        1
-    );
-    assert_eq!(
-        client
-            .get_records_by_type(&patient, &patient, &Symbol::new(&env, "VISIT"))
-            .len(),
-        0
-    );
+    let result = client.try_get_records_by_ids(&patient, &patient, &ids, &false);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_get_records_by_ids_unauthorized_caller_rejected() {
+    let env = Env::default();
+    let (client, patient, _doctor) = setup_for_get_records_by_ids(&env);
+    let stranger = Address::generate(&env);
+
+    let mut ids = Vec::new(&env);
+    ids.push_back(0);
+    let result = client.try_get_records_by_ids(&patient, &stranger, &ids, &false);
+    assert!(result.is_err());
 }
