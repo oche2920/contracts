@@ -2,7 +2,7 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Ledger, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, Events, Ledger, MockAuth, MockAuthInvoke},
     Address, Bytes, BytesN, Env, IntoVal, String, Symbol,
 };
 
@@ -1513,10 +1513,39 @@ fn make_ledger_info(sequence: u32, timestamp: u64) -> soroban_sdk::testutils::Le
 /// Shared setup for TTL tests: initialized contract + registered patient with consent + doctor.
 fn setup_for_ttl(
     env: &Env,
-) -> (MedicalRegistryClient, Address, Address, Address, BytesN<32>) {
+) -> (MedicalRegistryClient<'_>, Address, Address, Address, BytesN<32>) {
     let contract_id = env.register(MedicalRegistry, ());
     let client = MedicalRegistryClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    let treasury = Address::generate(env);
+    let fee_token = Address::generate(env);
+    let patient = Address::generate(env);
+    let doctor = Address::generate(env);
+    let v1 = make_version(env, 1);
 
+    env.mock_all_auths();
+
+    client.initialize(&admin, &treasury, &fee_token);
+    client.publish_consent_version(&v1);
+    client.register_patient(
+        &patient,
+        &String::from_str(env, "Alice"),
+        &631152000,
+        &String::from_str(env, "ipfs://alice"),
+    );
+    client.acknowledge_consent(&patient, &patient, &v1);
+    client.register_doctor(
+        &doctor,
+        &String::from_str(env, "Dr. Bob"),
+        &String::from_str(env, "Cardiology"),
+        &Bytes::from_array(env, &[1, 2, 3]),
+    );
+    client.grant_access(&patient, &patient, &doctor);
+
+    (client, admin, patient, doctor, v1)
+}
+
+/// ------------------------------------------------
 /// GET_RECORDS_BY_TYPE TESTS
 /// ------------------------------------------------
 
@@ -1549,7 +1578,7 @@ fn setup_for_filter(env: &Env) -> (MedicalRegistryClient<'_>, Address, Address) 
     );
     client.grant_access(&patient, &patient, &doctor);
 
-    (client, admin, patient, doctor, v1)
+    (client, patient, doctor)
 }
 
 /// After `add_medical_record`, TTL on the MedicalRecords key must not be zero —
@@ -1560,10 +1589,18 @@ fn test_add_record_extends_patient_ttl() {
     env.ledger().set(make_ledger_info(100, 1_000_000));
 
     let (client, _admin, patient, doctor, _v1) = setup_for_ttl(&env);
-    client.acknowledge_consent(&patient, &patient, &v1);
-    client.grant_access(&patient, &patient, &doctor);
 
-    (client, patient, doctor)
+    client.add_medical_record(
+        &patient,
+        &doctor,
+        &make_cid_v1(&env, 10),
+        &String::from_str(&env, "Checkup"),
+        &Symbol::new(&env, "LAB"),
+    );
+
+    // Verify the records are still accessible after adding
+    let records = client.get_medical_records(&patient);
+    assert_eq!(records.len(), 1);
 }
 
 #[test]
@@ -1575,24 +1612,6 @@ fn test_get_records_by_type_returns_matching_records() {
         &patient,
         &doctor,
         &make_cid_v1(&env, 10),
-        &Bytes::from_array(&env, &[9, 8, 7]),
-        &String::from_str(&env, "Checkup"),
-    );
-
-    // Verify the records are still accessible after adding
-    let records = client.get_medical_records(&patient);
-    assert_eq!(records.len(), 1);
-}
-
-/// After `get_medical_records`, TTL on the MedicalRecords key is bumped so the
-/// entry remains accessible.
-#[test]
-fn test_get_records_extends_ttl() {
-    let env = Env::default();
-    env.ledger().set(make_ledger_info(100, 1_000_000));
-
-    let (client, _admin, patient, doctor, _v1) = setup_for_ttl(&env);
-        &Bytes::from_array(&env, &[1, 1, 1]),
         &String::from_str(&env, "CBC panel"),
         &Symbol::new(&env, "LAB"),
     );
@@ -1631,17 +1650,21 @@ fn test_get_records_extends_ttl() {
     );
 }
 
+/// After `get_medical_records`, TTL on the MedicalRecords key is bumped so the
+/// entry remains accessible.
 #[test]
-fn test_get_records_by_type_returns_empty_when_no_match() {
+fn test_get_records_extends_ttl() {
     let env = Env::default();
-    let (client, patient, doctor) = setup_for_filter(&env);
+    env.ledger().set(make_ledger_info(100, 1_000_000));
+
+    let (client, _admin, patient, doctor, _v1) = setup_for_ttl(&env);
 
     client.add_medical_record(
         &patient,
         &doctor,
         &make_cid_v1(&env, 13),
-        &Bytes::from_array(&env, &[1, 2, 3]),
         &String::from_str(&env, "Initial record"),
+        &Symbol::new(&env, "LAB"),
     );
 
     // Call get_medical_records — internally bumps TTL
@@ -1655,6 +1678,24 @@ fn test_get_records_by_type_returns_empty_when_no_match() {
     ));
     let records_after = client.get_medical_records(&patient);
     assert_eq!(records_after.len(), 1);
+}
+
+#[test]
+fn test_get_records_by_type_returns_empty_when_no_match() {
+    let env = Env::default();
+    let (client, patient, doctor) = setup_for_filter(&env);
+
+    client.add_medical_record(
+        &patient,
+        &doctor,
+        &make_cid_v1(&env, 14),
+        &String::from_str(&env, "X-ray"),
+        &Symbol::new(&env, "IMAGING"),
+    );
+
+    // No PRESCRIPTION records exist — should return empty vec, not error
+    let result = client.get_records_by_type(&patient, &patient, &Symbol::new(&env, "PRESCRIPTION"));
+    assert_eq!(result.len(), 0);
 }
 
 /// `extend_patient_ttl` called by the patient themselves must succeed and keep
@@ -1717,13 +1758,6 @@ fn test_ttl_constants_are_defined() {
     assert_eq!(LEDGER_BUMP_AMOUNT, 535_680);
     assert_eq!(LEDGER_THRESHOLD, 518_400);
     assert!(LEDGER_BUMP_AMOUNT > LEDGER_THRESHOLD);
-        &String::from_str(&env, "X-ray"),
-        &Symbol::new(&env, "IMAGING"),
-    );
-
-    // No PRESCRIPTION records exist — should return empty vec, not error
-    let result = client.get_records_by_type(&patient, &patient, &Symbol::new(&env, "PRESCRIPTION"));
-    assert_eq!(result.len(), 0);
 }
 
 #[test]
@@ -1830,3 +1864,247 @@ fn test_get_records_by_type_multiple_types_isolation() {
         0
     );
 }
+
+/// ------------------------------------------------
+/// PROVIDER-TO-PATIENT RECORD NOTIFICATION EVENT TESTS
+/// ------------------------------------------------
+
+#[test]
+fn test_new_record_event_emitted_on_add_record() {
+    let env = Env::default();
+    let (client, patient, doctor) = setup_for_filter(&env);
+
+    env.ledger().set_timestamp(1_700_000_000);
+
+    client.add_medical_record(
+        &patient,
+        &doctor,
+        &make_cid_v1(&env, 20),
+        &String::from_str(&env, "Blood panel"),
+        &Symbol::new(&env, "LAB"),
+    );
+
+    let events = env.events().all();
+    let new_record_topic = Symbol::new(&env, NEW_RECORD_TOPIC);
+
+    let mut found = false;
+    for (_contract_id, topics, data) in events.iter() {
+        let expected_topics_val: soroban_sdk::Vec<soroban_sdk::Val> = (
+            new_record_topic.clone(),
+            patient.clone(),
+            doctor.clone(),
+        )
+            .into_val(&env);
+        if topics == expected_topics_val {
+            let actual_data: (u64, Symbol, u64) = data.into_val(&env);
+            assert_eq!(
+                actual_data,
+                (1u64, Symbol::new(&env, "LAB"), 1_700_000_000u64)
+            );
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "new_record event not found in emitted events");
+}
+
+#[test]
+fn test_new_record_event_contains_correct_record_id() {
+    let env = Env::default();
+    let (client, patient, doctor) = setup_for_filter(&env);
+
+    env.ledger().set_timestamp(1_700_000_000);
+    let new_record_topic = Symbol::new(&env, NEW_RECORD_TOPIC);
+
+    // Add first record
+    client.add_medical_record(
+        &patient,
+        &doctor,
+        &make_cid_v1(&env, 21),
+        &String::from_str(&env, "First record"),
+        &Symbol::new(&env, "LAB"),
+    );
+
+    let events1 = env.events().all();
+    let mut found_first = false;
+    for (_contract_id, topics, data) in events1.iter() {
+        let expected_topics_val: soroban_sdk::Vec<soroban_sdk::Val> =
+            (new_record_topic.clone(), patient.clone(), doctor.clone()).into_val(&env);
+        if topics == expected_topics_val {
+            let actual_data: (u64, Symbol, u64) = data.into_val(&env);
+            assert_eq!(
+                actual_data,
+                (1u64, Symbol::new(&env, "LAB"), 1_700_000_000u64)
+            );
+            found_first = true;
+        }
+    }
+    assert!(found_first, "First new_record event not found");
+
+    // Add second record
+    client.add_medical_record(
+        &patient,
+        &doctor,
+        &make_cid_v1(&env, 22),
+        &String::from_str(&env, "Second record"),
+        &Symbol::new(&env, "IMAGING"),
+    );
+
+    let events2 = env.events().all();
+    let mut found_second = false;
+    for (_contract_id, topics, data) in events2.iter() {
+        let expected_topics_val: soroban_sdk::Vec<soroban_sdk::Val> =
+            (new_record_topic.clone(), patient.clone(), doctor.clone()).into_val(&env);
+        if topics == expected_topics_val {
+            let actual_data: (u64, Symbol, u64) = data.into_val(&env);
+            assert_eq!(
+                actual_data,
+                (2u64, Symbol::new(&env, "IMAGING"), 1_700_000_000u64)
+            );
+            found_second = true;
+        }
+    }
+    assert!(found_second, "Second new_record event not found");
+}
+
+#[test]
+fn test_new_record_event_contains_correct_record_type() {
+    let env = Env::default();
+    let (client, patient, doctor) = setup_for_filter(&env);
+
+    env.ledger().set_timestamp(1_700_000_000);
+    let new_record_topic = Symbol::new(&env, NEW_RECORD_TOPIC);
+
+    // Add a LAB record
+    client.add_medical_record(
+        &patient,
+        &doctor,
+        &make_cid_v1(&env, 23),
+        &String::from_str(&env, "Lab test"),
+        &Symbol::new(&env, "LAB"),
+    );
+
+    let events1 = env.events().all();
+    let mut found_lab = false;
+    for (_contract_id, topics, data) in events1.iter() {
+        let expected_topics_val: soroban_sdk::Vec<soroban_sdk::Val> =
+            (new_record_topic.clone(), patient.clone(), doctor.clone()).into_val(&env);
+        if topics == expected_topics_val {
+            let actual_data: (u64, Symbol, u64) = data.into_val(&env);
+            if actual_data == (1u64, Symbol::new(&env, "LAB"), 1_700_000_000u64) {
+                found_lab = true;
+            }
+        }
+    }
+    assert!(found_lab, "LAB record event not found");
+
+    // Add an IMAGING record
+    client.add_medical_record(
+        &patient,
+        &doctor,
+        &make_cid_v1(&env, 24),
+        &String::from_str(&env, "X-ray"),
+        &Symbol::new(&env, "IMAGING"),
+    );
+
+    let events2 = env.events().all();
+    let mut found_imaging = false;
+    for (_contract_id, topics, data) in events2.iter() {
+        let expected_topics_val: soroban_sdk::Vec<soroban_sdk::Val> =
+            (new_record_topic.clone(), patient.clone(), doctor.clone()).into_val(&env);
+        if topics == expected_topics_val {
+            let actual_data: (u64, Symbol, u64) = data.into_val(&env);
+            if actual_data == (2u64, Symbol::new(&env, "IMAGING"), 1_700_000_000u64) {
+                found_imaging = true;
+            }
+        }
+    }
+    assert!(found_imaging, "IMAGING record event not found");
+}
+
+#[test]
+fn test_new_record_event_contains_correct_timestamp() {
+    let env = Env::default();
+    let (client, patient, doctor) = setup_for_filter(&env);
+
+    let specific_timestamp: u64 = 1_710_000_000;
+    env.ledger().set_timestamp(specific_timestamp);
+
+    client.add_medical_record(
+        &patient,
+        &doctor,
+        &make_cid_v1(&env, 25),
+        &String::from_str(&env, "Timed record"),
+        &Symbol::new(&env, "LAB"),
+    );
+
+    let events = env.events().all();
+    let new_record_topic = Symbol::new(&env, NEW_RECORD_TOPIC);
+
+    let mut found = false;
+    for (_contract_id, topics, data) in events.iter() {
+        let expected_topics_val: soroban_sdk::Vec<soroban_sdk::Val> = (
+            new_record_topic.clone(),
+            patient.clone(),
+            doctor.clone(),
+        )
+            .into_val(&env);
+        if topics == expected_topics_val {
+            let actual_data: (u64, Symbol, u64) = data.into_val(&env);
+            assert_eq!(
+                actual_data,
+                (1u64, Symbol::new(&env, "LAB"), specific_timestamp),
+                "Event data must include the exact ledger timestamp"
+            );
+            found = true;
+            break;
+        }
+    }
+    assert!(found, "new_record event with correct timestamp not found");
+}
+
+#[test]
+fn test_new_record_event_not_emitted_on_unauthorized_add() {
+    let env = Env::default();
+    let contract_id = env.register(MedicalRegistry, ());
+    let client = MedicalRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let patient = Address::generate(&env);
+    let unauthorized_doctor = Address::generate(&env);
+    let v1 = make_version(&env, 1);
+
+    env.mock_all_auths();
+    let treasury = Address::generate(&env);
+    let fee_token = Address::generate(&env);
+    client.initialize(&admin, &treasury, &fee_token);
+    client.publish_consent_version(&v1);
+    client.acknowledge_consent(&patient, &patient, &v1);
+    // Intentionally do NOT grant access to unauthorized_doctor
+
+    let result = client.try_add_medical_record(
+        &patient,
+        &unauthorized_doctor,
+        &make_cid_v1(&env, 26),
+        &String::from_str(&env, "Should fail"),
+        &Symbol::new(&env, "LAB"),
+    );
+    assert!(result.is_err());
+
+    // Verify no new_record event was emitted
+    let events = env.events().all();
+    let new_record_topic = Symbol::new(&env, NEW_RECORD_TOPIC);
+    for (_contract_id, topics, _data) in events.iter() {
+        let nr_topics: soroban_sdk::Vec<soroban_sdk::Val> = (
+            new_record_topic.clone(),
+            patient.clone(),
+            unauthorized_doctor.clone(),
+        )
+            .into_val(&env);
+        assert_ne!(
+            topics, nr_topics,
+            "new_record event should NOT be emitted when add_medical_record fails"
+        );
+    }
+}
+
+
