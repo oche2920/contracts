@@ -109,6 +109,18 @@
                       "val": {
                         "string": "Jane Doe"
                       }
+                    },
+                    {
+                      "key": {
+                        "symbol": "status"
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "Active"
+                          }
+                        ]
+                      }
                     }
                   ]
                 }

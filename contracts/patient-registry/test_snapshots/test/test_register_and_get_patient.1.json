@@ -106,6 +106,18 @@
                       "val": {
                         "string": "John Doe"
                       }
+                    },
+                    {
+                      "key": {
+                        "symbol": "status"
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "symbol": "Active"
+                          }
+                        ]
+                      }
                     }
                   ]
                 }
