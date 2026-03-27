@@ -752,6 +752,8 @@ impl MedicalRegistry {
         records.push_back(record);
         env.storage().persistent().set(&records_key, &records);
 
+        // Extend TTL for all patient persistent entries after writing a record
+        Self::bump_patient_keys(&env, &patient);
         // Emit provider-to-patient record notification
         env.events().publish(
             (
@@ -819,6 +821,44 @@ impl MedicalRegistry {
             }
         }
         filtered
+    }
+
+    /// Returns records by positional IDs for a patient.
+    ///
+    /// `ids` can contain up to 10 entries. Missing IDs are either skipped
+    /// (`strict_not_found = false`) or cause a panic (`strict_not_found = true`).
+    pub fn get_records_by_ids(
+        env: Env,
+        patient: Address,
+        caller: Address,
+        ids: Vec<u32>,
+        strict_not_found: bool,
+    ) -> Vec<MedicalRecord> {
+        if ids.len() > 10 {
+            panic!("Too many record IDs; maximum is 10");
+        }
+        require_record_access(&env, &patient, &caller);
+
+        let key = DataKey::MedicalRecords(patient.clone());
+        let records: Vec<MedicalRecord> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(Vec::new(&env));
+
+        let mut selected = Vec::new(&env);
+        for id in ids.iter() {
+            match records.get(id) {
+                Some(record) => selected.push_back(record),
+                None => {
+                    if strict_not_found {
+                        panic!("Record ID not found");
+                    }
+                }
+            }
+        }
+
+        selected
     }
 
     // =====================================================
