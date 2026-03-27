@@ -365,6 +365,33 @@ fn test_validate_garbage_bytes_rejected() {
 }
 
 #[test]
+fn test_validate_did_ok() {
+    let env = Env::default();
+    let did = String::from_str(&env, "did:web:example.com");
+    assert!(validate_did(&did).is_ok());
+}
+
+#[test]
+fn test_validate_did_rejects_bad_prefix() {
+    let env = Env::default();
+    let did = String::from_str(&env, "notdid:web:x");
+    assert_eq!(validate_did(&did), Err(ContractError::InvalidDID));
+}
+
+#[test]
+fn test_validate_score_ok() {
+    assert!(validate_score(0).is_ok());
+    assert!(validate_score(100).is_ok());
+    assert!(validate_score(50).is_ok());
+}
+
+#[test]
+fn test_validate_score_rejects_out_of_range() {
+    assert_eq!(validate_score(-1), Err(ContractError::InvalidScore));
+    assert_eq!(validate_score(101), Err(ContractError::InvalidScore));
+}
+
+#[test]
 fn test_add_medical_record_rejects_invalid_cid() {
     let env = Env::default();
     let contract_id = env.register(MedicalRegistry, ());
@@ -1529,6 +1556,13 @@ fn setup_for_ttl(
     let doctor = Address::generate(env);
     let v1 = make_version(env, 1);
 
+    let admin = Address::generate(env);
+    let treasury = Address::generate(env);
+    let fee_token = Address::generate(env);
+    let patient = Address::generate(env);
+    let doctor = Address::generate(env);
+    let v1 = make_version(env, 1);
+
     env.mock_all_auths();
 
     client.initialize(&admin, &treasury, &fee_token);
@@ -1608,6 +1642,8 @@ fn test_add_record_extends_patient_ttl() {
     client.add_medical_record(
         &patient,
         &doctor,
+        &make_cid_v1(&env, 5),
+        &String::from_str(&env, "Visit note"),
         &make_cid_v1(&env, 10),
         &String::from_str(&env, "Initial checkup"),
         &Symbol::new(&env, "VISIT"),
@@ -1644,6 +1680,7 @@ fn test_get_records_by_type_returns_matching_records() {
     client.add_medical_record(
         &patient,
         &doctor,
+        &make_cid_v1(&env, 11),
         &make_cid_v1(&env, 10),
         &String::from_str(&env, "CBC panel"),
         &Symbol::new(&env, "LAB"),
@@ -1651,6 +1688,9 @@ fn test_get_records_by_type_returns_matching_records() {
     client.add_medical_record(
         &patient,
         &doctor,
+        &make_cid_v1(&env, 15),
+        &String::from_str(&env, "Amoxicillin"),
+        &Symbol::new(&env, "PRESCRIPTION"),
         &make_cid_v1(env, 20),
         &String::from_str(env, "Record 0"),
         &Symbol::new(env, "LAB"),

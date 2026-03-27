@@ -6,6 +6,7 @@ use soroban_sdk::{
     Address, Bytes, BytesN, Env, Map, String, Symbol, Vec,
 };
 
+pub mod validation;
 pub const NEW_RECORD_TOPIC: &str = "new_record";
 
 // =====================================================
@@ -103,38 +104,39 @@ pub struct RegulatoryHold {
 #[repr(u32)]
 pub enum ContractError {
     InvalidCID = 1,
+    InvalidDID = 2,
+    InvalidScore = 3,
     ContractFrozen = 2,
 }
 
 pub fn validate_cid(cid: &Bytes) -> Result<(), ContractError> {
-    let len = cid.len();
-
+    let len = cid.len() as usize;
     if len == 0 || len > 512 {
         return Err(ContractError::InvalidCID);
     }
-
-    let first = cid.get(0).ok_or(ContractError::InvalidCID)?;
-
-    if first == b'b' {
-        return if len >= 36 {
-            Ok(())
-        } else {
-            Err(ContractError::InvalidCID)
-        };
+    let mut buf = [0u8; 512];
+    for i in 0..len {
+        buf[i] = cid.get(i as u32).ok_or(ContractError::InvalidCID)?;
     }
+    validation::validate_cid_bytes(&buf[..len]).map_err(|_| ContractError::InvalidCID)
+}
 
-    if len >= 2 {
-        let second = cid.get(1).ok_or(ContractError::InvalidCID)?;
-        if first == b'Q' && second == b'm' && len == 46 {
-            return Ok(());
-        }
-
-        if len == 34 && first == 0x12 && second == 0x20 {
-            return Ok(());
-        }
+/// Validates a decentralized identifier string (`did:method:…`) for metadata or
+/// cross-chain references. Fuzzed via `validation::validate_did_bytes`.
+pub fn validate_did(did: &String) -> Result<(), ContractError> {
+    let len = did.len() as usize;
+    if len > 256 {
+        return Err(ContractError::InvalidDID);
     }
+    let mut buf = [0u8; 256];
+    did.copy_into_slice(&mut buf[..len]);
+    validation::validate_did_bytes(&buf[..len]).map_err(|_| ContractError::InvalidDID)
+}
 
-    Err(ContractError::InvalidCID)
+/// Validates a bounded numeric score (default 0–100). Fuzzed via
+/// `validation::validate_score_i32`.
+pub fn validate_score(score: i32) -> Result<(), ContractError> {
+    validation::validate_score_i32(score).map_err(|_| ContractError::InvalidScore)
 }
 
 fn require_patient_or_guardian(env: &Env, patient: &Address, caller: &Address) {
