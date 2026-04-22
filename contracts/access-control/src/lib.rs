@@ -14,6 +14,15 @@ mod test;
 pub enum ContractError {
     InvalidDidFormat = 1,
     AlreadyInitialized = 2,
+    EntityAlreadyRegistered = 3,
+    EntityNotFound = 4,
+    GrantorNotRegistered = 5,
+    GranteeNotRegistered = 6,
+    AccessAlreadyGranted = 7,
+    NotAuthorizedToRevoke = 8,
+    AccessPermissionNotFound = 9,
+    ContractNotInitialized = 10,
+    OnlyAdminCanDeactivate = 11,
 }
 
 /// --------------------

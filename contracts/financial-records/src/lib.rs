@@ -1,5 +1,12 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, vec, Address, Env, String, Vec};
+use soroban_sdk::{contract, contracterror, contractimpl, contracttype, vec, Address, Env, String, Vec};
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum ContractError {
+    AccessDenied = 1,
+}
 
 #[contracttype]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -68,8 +75,8 @@ impl FinancialRecordContract {
 
     /// Retrieves all financial records for an owner.
     /// Access is allowed if the caller is the owner or has been granted access.
-    pub fn get_financial_records(e: Env, caller: Address, owner: Address) -> Vec<FinancialRecord> {
-        Self::check_access(&e, &caller, &owner);
+    pub fn get_financial_records(e: Env, caller: Address, owner: Address) -> Result<Vec<FinancialRecord>, ContractError> {
+        Self::check_access(&e, &caller, &owner)?;
 
         let count: u32 = e
             .storage()
@@ -87,7 +94,7 @@ impl FinancialRecordContract {
                 records.push_back(record);
             }
         }
-        records
+        Ok(records)
     }
 
     /// Retrieves records within a specific date range.
@@ -97,8 +104,8 @@ impl FinancialRecordContract {
         owner: Address,
         start: u64,
         end: u64,
-    ) -> Vec<FinancialRecord> {
-        Self::check_access(&e, &caller, &owner);
+    ) -> Result<Vec<FinancialRecord>, ContractError> {
+        Self::check_access(&e, &caller, &owner)?;
 
         let count: u32 = e
             .storage()
@@ -118,7 +125,7 @@ impl FinancialRecordContract {
                 }
             }
         }
-        records
+        Ok(records)
     }
 
     /// Retrieves records of a specific type.
@@ -127,8 +134,8 @@ impl FinancialRecordContract {
         caller: Address,
         owner: Address,
         record_type: RecordType,
-    ) -> Vec<FinancialRecord> {
-        Self::check_access(&e, &caller, &owner);
+    ) -> Result<Vec<FinancialRecord>, ContractError> {
+        Self::check_access(&e, &caller, &owner)?;
 
         let count: u32 = e
             .storage()
@@ -148,7 +155,7 @@ impl FinancialRecordContract {
                 }
             }
         }
-        records
+        Ok(records)
     }
 
     /// Grants access to another address.
@@ -168,9 +175,9 @@ impl FinancialRecordContract {
     }
 
     /// Internal helper to check access.
-    fn check_access(e: &Env, caller: &Address, owner: &Address) {
+    fn check_access(e: &Env, caller: &Address, owner: &Address) -> Result<(), ContractError> {
         if caller == owner {
-            return;
+            return Ok(());
         }
         let is_authorized: bool = e
             .storage()
@@ -179,8 +186,9 @@ impl FinancialRecordContract {
             .unwrap_or(false);
 
         if !is_authorized {
-            panic!("Access denied");
+            return Err(ContractError::AccessDenied);
         }
+        Ok(())
     }
 }
 
