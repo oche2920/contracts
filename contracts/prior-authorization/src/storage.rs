@@ -1,8 +1,8 @@
-use soroban_sdk::{Address, Env, Vec};
+use soroban_sdk::{Address, Env, Vec, Symbol};
 
 use crate::types::{
     Appeal, AuthorizationRequest, DataKey, ExtensionRequest, PeerToPeerRequest,
-    SupportingDocument, UsageRecord,
+    SupportingDocument, UsageRecord, Reviewer, SLAConfig,
 };
 
 // -----------------------------------------------------------------------
@@ -160,4 +160,115 @@ pub fn save_usage_record(env: &Env, record: &UsageRecord) {
     env.storage()
         .persistent()
         .set(&DataKey::UsageRecords(record.auth_request_id), &records);
+}
+
+// -----------------------------------------------------------------------
+// Reviewer Registry
+// -----------------------------------------------------------------------
+
+pub fn save_reviewer(env: &Env, reviewer: &Reviewer) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Reviewer(reviewer.reviewer_id.clone()), reviewer);
+
+    // Add to insurer's reviewer list
+    let mut reviewers: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::InsurerReviewers(reviewer.insurer_id.clone()))
+        .unwrap_or(Vec::new(env));
+    
+    if !reviewers.iter().any(|r| r == &reviewer.reviewer_id) {
+        reviewers.push_back(reviewer.reviewer_id.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::InsurerReviewers(reviewer.insurer_id.clone()), &reviewers);
+    }
+}
+
+pub fn load_reviewer(env: &Env, reviewer_id: &Address) -> Option<Reviewer> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::Reviewer(reviewer_id.clone()))
+}
+
+pub fn load_insurer_reviewers(env: &Env, insurer_id: &Address) -> Vec<Address> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::InsurerReviewers(insurer_id.clone()))
+        .unwrap_or(Vec::new(env))
+}
+
+pub fn update_reviewer_case_count(env: &Env, reviewer_id: &Address, delta: i32) -> Result<(), crate::types::Error> {
+    let mut reviewer: Reviewer = load_reviewer(env, reviewer_id)
+        .ok_or(crate::types::Error::ReviewerNotFound)?;
+
+    if delta > 0 {
+        if reviewer.current_cases + delta as u32 > reviewer.max_cases {
+            return Err(crate::types::Error::SLAViolation);
+        }
+    } else if delta < 0 {
+        reviewer.current_cases = reviewer.current_cases.saturating_sub((-delta) as u32);
+    } else {
+        return Ok(());
+    }
+
+    reviewer.current_cases += delta as u32;
+    save_reviewer(env, &reviewer);
+    Ok(())
+}
+
+// -----------------------------------------------------------------------
+// SLA Configuration
+// -----------------------------------------------------------------------
+
+pub fn save_sla_config(env: &Env, config: &SLAConfig) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::SLAConfig(config.urgency.clone()), config);
+}
+
+pub fn load_sla_config(env: &Env, urgency: &Symbol) -> Option<SLAConfig> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::SLAConfig(urgency.clone()))
+}
+
+// -----------------------------------------------------------------------
+// SLA Tracking
+// -----------------------------------------------------------------------
+
+pub fn add_overdue_auth(env: &Env, auth_request_id: u64) {
+    let mut overdue: Vec<u64> = env
+        .storage()
+        .instance()
+        .get(&DataKey::OverdueAuths(Vec::new(env)))
+        .unwrap_or(Vec::new(env));
+    
+    if !overdue.iter().any(|&id| id == auth_request_id) {
+        overdue.push_back(auth_request_id);
+        env.storage()
+            .instance()
+            .set(&DataKey::OverdueAuths(overdue), &());
+    }
+}
+
+pub fn remove_overdue_auth(env: &Env, auth_request_id: u64) {
+    let mut overdue: Vec<u64> = env
+        .storage()
+        .instance()
+        .get(&DataKey::OverdueAuths(Vec::new(env)))
+        .unwrap_or(Vec::new(env));
+    
+    overdue.retain(|&id| id != auth_request_id);
+    env.storage()
+        .instance()
+        .set(&DataKey::OverdueAuths(overdue), &());
+}
+
+pub fn get_overdue_auths(env: &Env) -> Vec<u64> {
+    env.storage()
+        .instance()
+        .get(&DataKey::OverdueAuths(Vec::new(env)))
+        .unwrap_or(Vec::new(env))
 }
