@@ -12,10 +12,51 @@ pub struct MedicalClaimsSystem;
 
 #[contractimpl]
 impl MedicalClaimsSystem {
+    /// One-time setup: register the contract admin.
+    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+        if env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::AlreadyInitialized);
+        }
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        Ok(())
+    }
+
+    /// Admin-only: authorize an insurer address to adjudicate and pay claims.
+    pub fn register_insurer(env: Env, admin: Address, insurer: Address) -> Result<(), Error> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        if admin != stored_admin {
+            return Err(Error::NotAuthorized);
+        }
+        env.storage()
+            .persistent()
+            .set(&DataKey::Insurer(insurer), &true);
+        Ok(())
+    }
+
+    fn require_insurer(env: &Env, insurer: &Address) -> Result<(), Error> {
+        let registered: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Insurer(insurer.clone()))
+            .unwrap_or(false);
+        if !registered {
+            return Err(Error::InsurerNotRegistered);
+        }
+        Ok(())
+    }
+
+    /// Submit a claim bound to a specific registered insurer.
     pub fn submit_claim(
         env: Env,
         provider_id: Address,
         patient_id: Address,
+        insurer_id: Address,
         policy_id: u64,
         service_date: u64,
         service_codes: Vec<ServiceLine>,
@@ -24,6 +65,7 @@ impl MedicalClaimsSystem {
         total_amount: i128,
     ) -> Result<u64, Error> {
         provider_id.require_auth();
+        Self::require_insurer(&env, &insurer_id)?;
 
         let count: u64 = env
             .storage()
@@ -39,6 +81,7 @@ impl MedicalClaimsSystem {
             claim_id,
             provider_id: provider_id.clone(),
             patient_id: patient_id.clone(),
+            insurer_id,
             policy_id,
             service_date,
             service_codes,
@@ -55,7 +98,6 @@ impl MedicalClaimsSystem {
             .persistent()
             .set(&DataKey::Claim(claim_id), &claim);
 
-        // Store mappings
         let mut p_claims: Vec<u64> = env
             .storage()
             .persistent()
@@ -79,22 +121,28 @@ impl MedicalClaimsSystem {
         Ok(claim_id)
     }
 
+    /// Adjudicate a claim. Caller must be the registered insurer bound to this claim.
     pub fn adjudicate_claim(
         env: Env,
         claim_id: u64,
-        insurance_admin: Address,
+        insurer_id: Address,
         approved_lines: Vec<u64>,
         denied_lines: Vec<DenialInfo>,
         approved_amount: i128,
         patient_responsibility: i128,
     ) -> Result<(), Error> {
-        insurance_admin.require_auth();
+        insurer_id.require_auth();
+        Self::require_insurer(&env, &insurer_id)?;
 
         let mut claim: ClaimRecord = env
             .storage()
             .persistent()
             .get(&DataKey::Claim(claim_id))
             .ok_or(Error::ClaimNotFound)?;
+
+        if claim.insurer_id != insurer_id {
+            return Err(Error::NotAuthorized);
+        }
 
         if claim.status != ClaimStatus::Submitted && claim.status != ClaimStatus::Appealed {
             return Err(Error::InvalidStateTransition);
@@ -154,21 +202,27 @@ impl MedicalClaimsSystem {
         Ok(claim_id)
     }
 
+    /// Process payment. Caller must be the registered insurer bound to this claim.
     pub fn process_payment(
         env: Env,
         claim_id: u64,
-        insurance_admin: Address,
-        _payment_amount: i128, // Currently ignored, just relying on record
+        insurer_id: Address,
+        _payment_amount: i128,
         payment_date: u64,
         payment_reference: String,
     ) -> Result<(), Error> {
-        insurance_admin.require_auth();
+        insurer_id.require_auth();
+        Self::require_insurer(&env, &insurer_id)?;
 
         let mut claim: ClaimRecord = env
             .storage()
             .persistent()
             .get(&DataKey::Claim(claim_id))
             .ok_or(Error::ClaimNotFound)?;
+
+        if claim.insurer_id != insurer_id {
+            return Err(Error::NotAuthorized);
+        }
 
         if claim.status != ClaimStatus::Adjudicated {
             return Err(Error::InvalidStateTransition);
@@ -206,12 +260,10 @@ impl MedicalClaimsSystem {
             return Err(Error::NotAuthorized);
         }
 
-        // Technically, patient can pay anytime after adjudication
         if claim.status != ClaimStatus::Paid && claim.status != ClaimStatus::Adjudicated {
             return Err(Error::InvalidStateTransition);
         }
 
-        // Apply payment - simplified reconciliation
         let current_resp = claim.patient_responsibility.unwrap_or(0);
         let new_resp = current_resp - payment_amount;
         claim.patient_responsibility = Some(if new_resp < 0 { 0 } else { new_resp });
