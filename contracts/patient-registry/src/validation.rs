@@ -4,8 +4,7 @@
 //! inputs never rely on Soroban host APIs. All return `Result` — **no panics**
 //! on malformed input.
 
-/// CID rules mirror [`super::validate_cid`](crate::validate_cid): length bounds,
-/// CIDv1 base32 (`b`…), CIDv0 `Qm…`, or raw multihash `0x12 0x20` + 32 bytes.
+#[allow(clippy::result_unit_err)]
 pub fn validate_cid_bytes(cid: &[u8]) -> Result<(), ()> {
     let len = cid.len();
     if len == 0 || len > 512 {
@@ -29,6 +28,7 @@ pub fn validate_cid_bytes(cid: &[u8]) -> Result<(), ()> {
 
 /// Minimal W3C DID Core–style check: UTF-8, `did:` prefix, non-empty method,
 /// non-empty method-specific id. Designed to reject garbage without panicking.
+#[allow(clippy::result_unit_err, clippy::manual_range_contains)]
 pub fn validate_did_bytes(did: &[u8]) -> Result<(), ()> {
     let len = did.len();
     if len < 7 || len > 256 {
@@ -64,6 +64,7 @@ pub fn validate_did_bytes(did: &[u8]) -> Result<(), ()> {
 pub const SCORE_MIN: i32 = 0;
 pub const SCORE_MAX: i32 = 100;
 
+#[allow(clippy::result_unit_err)]
 pub fn validate_score_i32(score: i32) -> Result<(), ()> {
     if (SCORE_MIN..=SCORE_MAX).contains(&score) {
         Ok(())
