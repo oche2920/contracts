@@ -10,6 +10,7 @@ pub enum Error {
     AlreadyExists = 4,
     AccessExpired = 5,
     ReportAlreadyExists = 6,
+    GrantRevoked = 7,
 }
 
 #[contracttype]
@@ -72,8 +73,10 @@ pub struct ImagingReport {
 pub struct AccessGrant {
     pub viewer_id: Address,
     pub access_type: Symbol,
+    pub purpose: String,
     pub granted_at: u64,
     pub expires_at: Option<u64>,
+    pub revoked_at: Option<u64>,
 }
 
 #[contracttype]
