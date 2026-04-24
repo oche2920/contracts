@@ -819,4 +819,5 @@ fn contains_string(values: &Vec<String>, needle: &String) -> bool {
     false
 }
 
+#[cfg(test)]
 mod test;

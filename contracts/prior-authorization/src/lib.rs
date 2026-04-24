@@ -307,7 +307,8 @@ impl PriorAuthorizationContract {
         save_peer_to_peer(&env, &p2p);
 
         // Update auth status
-        let mut req = load_auth_request(&env, auth_request_id).unwrap();
+        let mut req = load_auth_request(&env, auth_request_id)
+            .ok_or(Error::AuthRequestNotFound)?;
         req.status = AuthStatus::PeerToPeerScheduled;
         save_auth_request(&env, &req);
 
@@ -350,7 +351,8 @@ impl PriorAuthorizationContract {
         // Verify level increases monotonically
         let existing = load_appeals_for_auth(&env, auth_request_id);
         if !existing.is_empty() {
-            let last = existing.get(existing.len() - 1).unwrap();
+            let last = existing.get(existing.len() - 1)
+                .ok_or(Error::AppealNotFound)?;
             if appeal_level <= last.appeal_level {
                 return Err(Error::MaxAppealLevelReached);
             }

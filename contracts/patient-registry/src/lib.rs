@@ -446,7 +446,7 @@ impl MedicalRegistry {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .expect("Not initialized");
+            .ok_or(ContractError::NotFound)?;
         admin.require_auth();
         if amount < 0 {
             return Err(ContractError::InvalidFee);
@@ -468,7 +468,7 @@ impl MedicalRegistry {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .expect("Not initialized");
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotFound));
         admin.require_auth();
         env.storage()
             .persistent()
@@ -483,7 +483,7 @@ impl MedicalRegistry {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .expect("Not initialized");
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotFound));
         admin.require_auth();
         env.storage()
             .persistent()
@@ -498,7 +498,7 @@ impl MedicalRegistry {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .expect("Not initialized");
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotFound));
         admin.require_auth();
         env.storage()
             .persistent()
@@ -525,7 +525,7 @@ impl MedicalRegistry {
             .storage()
             .persistent()
             .get(&DataKey::ConsentVersion)
-            .expect("No consent version published");
+            .ok_or(ContractError::NotFound)?;
         if current != version_hash {
             return Err(ContractError::ConsentVersionMismatch);
         }
@@ -713,7 +713,7 @@ impl MedicalRegistry {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .expect("Not initialized");
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NotFound));
 
         let is_admin = admin == patient;
         if is_admin {
@@ -1068,12 +1068,12 @@ impl MedicalRegistry {
                 .storage()
                 .instance()
                 .get(&DataKey::FeeToken)
-                .expect("Fee token not configured");
+                .ok_or(ContractError::NotFound)?;
             let treasury: Address = env
                 .storage()
                 .instance()
                 .get(&DataKey::Treasury)
-                .expect("Treasury not configured");
+                .ok_or(ContractError::NotFound)?;
             token::TokenClient::new(&env, &token_id).transfer(&doctor, &treasury, &fee);
         }
 
@@ -1231,7 +1231,7 @@ impl MedicalRegistry {
                     .storage()
                     .instance()
                     .get(&DataKey::Admin)
-                    .expect("Not initialized");
+                    .ok_or(ContractError::NotFound)?;
                 if caller != admin {
                     return Err(ContractError::NotAuthorized);
                 }
@@ -1278,7 +1278,7 @@ impl MedicalRegistry {
                     .storage()
                     .instance()
                     .get(&DataKey::Admin)
-                    .expect("Not initialized");
+                    .ok_or(ContractError::NotFound)?;
                 if caller != admin {
                     return Err(ContractError::NotAuthorized);
                 }
@@ -1314,7 +1314,7 @@ impl MedicalRegistry {
             );
         }
 
-        let mut latest = records.get(0).unwrap().clone();
+        let mut latest = records.get(0).ok_or(ContractError::NoRecordsFound)?.clone();
         for r in records.iter() {
             if r.timestamp > latest.timestamp {
                 latest = r.clone();
@@ -1585,7 +1585,7 @@ impl MedicalRegistry {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .expect("Not initialized");
+            .ok_or(ContractError::NotFound)?;
         admin.require_auth();
 
         const SNAPSHOT_INTERVAL: u32 = 100_000;
@@ -1927,7 +1927,7 @@ impl MedicalRegistry {
             .storage()
             .instance()
             .get(&DataKey::Admin)
-            .expect("Contract not initialized");
+            .unwrap_or_else(|| panic_with_error!(env, ContractError::NotFound));
         admin.require_auth();
     }
 
