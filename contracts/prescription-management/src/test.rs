@@ -8,6 +8,8 @@ use soroban_sdk::{
     vec,
 };
 
+mod test_enhanced;
+
 #[test]
 fn test_prescription_lifecycle() {
     let env = Env::default();

@@ -17,6 +17,14 @@ pub enum Error {
     InvalidSeverity = 6,
     InteractionNotFound = 7,
     MissingOverrideReason = 8,
+    InvalidStatusTransition = 9,
+    InvalidTransfer = 10,
+    QuantityExceeded = 11,
+    RefillExceeded = 12,
+    PharmacyNotAuthorized = 13,
+    TransferChainBroken = 14,
+    MissingTransferReason = 15,
+    ControlledSubstanceViolation = 16,
 }
 
 #[contracttype]
@@ -79,10 +87,14 @@ pub enum DataKey {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PrescriptionStatus {
+    Issued,
     Active,
     Dispensed,
+    PartiallyDispensed,
     Expired,
     Transferred,
+    Cancelled,
+    Suspended,
 }
 
 #[contracttype]
@@ -92,12 +104,30 @@ pub struct Prescription {
     pub patient_id: Address,
     pub medication_name: String,
     pub quantity: u32,
+    pub quantity_dispensed: u32,
+    pub refills_allowed: u32,
     pub refills_remaining: u32,
+    pub refills_used: u32,
     pub is_controlled: bool,
+    pub schedule: Option<u32>, // Controlled substance schedule
     pub current_pharmacy: Option<Address>,
+    pub issuing_pharmacy: Option<Address>,
     pub status: PrescriptionStatus,
+    pub issued_at: u64,
     pub valid_until: u64,
-    // Add additional fields here as needed
+    pub last_dispensed: Option<u64>,
+    pub transfer_count: u32,
+    pub transfer_history: Vec<TransferRecord>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct TransferRecord {
+    pub from_pharmacy: Address,
+    pub to_pharmacy: Address,
+    pub transfer_reason: String,
+    pub transferred_at: u64,
+    pub transferred_by: Address,
 }
 
 // Struct to bypass the 10-parameter limit
@@ -114,6 +144,24 @@ pub struct IssueRequest {
     pub schedule: Option<u32>,
     pub valid_until: u64,
     pub substitution_allowed: bool,
+    pub pharmacy_id: Option<Address>,
+}
+
+#[contracttype]
+pub struct TransferRequest {
+    pub prescription_id: u64,
+    pub to_pharmacy: Address,
+    pub transfer_reason: String,
+    pub urgency: Symbol,
+}
+
+#[contracttype]
+pub struct DispenseRequest {
+    pub prescription_id: u64,
+    pub quantity: u32,
+    pub lot: String,
+    pub expires_at: u64,
+    pub ndc_code: String,
 }
 
 #[contract]
@@ -140,11 +188,20 @@ impl PrescriptionContract {
             patient_id,
             medication_name: req.medication_name,
             quantity: req.quantity,
+            quantity_dispensed: 0,
+            refills_allowed: req.refills_allowed,
             refills_remaining: req.refills_allowed,
+            refills_used: 0,
             is_controlled: req.is_controlled,
-            current_pharmacy: None,
-            status: PrescriptionStatus::Active,
+            schedule: req.schedule,
+            current_pharmacy: req.pharmacy_id.clone(),
+            issuing_pharmacy: req.pharmacy_id,
+            status: PrescriptionStatus::Issued,
+            issued_at: env.ledger().timestamp(),
             valid_until: req.valid_until,
+            last_dispensed: None,
+            transfer_count: 0,
+            transfer_history: Vec::new(&env),
         };
 
         env.storage().persistent().set(&id, &prescription);
@@ -157,43 +214,179 @@ impl PrescriptionContract {
 
     pub fn dispense_prescription(
         env: Env,
+        req: DispenseRequest,
+        pharmacy_id: Address,
+    ) -> Result<(), Error> {
+        pharmacy_id.require_auth();
+
+        let mut p: Prescription = env
+            .storage()
+            .persistent()
+            .get(&req.prescription_id)
+            .ok_or(Error::NotFound)?;
+
+        // Validate prescription is in dispensible state
+        if !matches!(p.status, PrescriptionStatus::Issued | PrescriptionStatus::Active | PrescriptionStatus::PartiallyDispensed) {
+            return Err(Error::InvalidStatusTransition);
+        }
+
+        // Check expiration
+        if env.ledger().timestamp() > p.valid_until {
+            return Err(Error::Expired);
+        }
+
+        // Validate pharmacy authorization
+        if let Some(current_pharmacy) = p.current_pharmacy {
+            if current_pharmacy != pharmacy_id {
+                return Err(Error::PharmacyNotAuthorized);
+            }
+        } else {
+            // First dispense sets the pharmacy
+            p.current_pharmacy = Some(pharmacy_id);
+        }
+
+        // Validate quantity constraints
+        if p.quantity_dispensed + req.quantity > p.quantity {
+            return Err(Error::QuantityExceeded);
+        }
+
+        // Controlled substance checks
+        if p.is_controlled {
+            if let Some(schedule) = p.schedule {
+                if schedule == 2 && req.quantity > p.quantity / 2 {
+                    return Err(Error::ControlledSubstanceViolation);
+                }
+            }
+        }
+
+        // Update prescription state
+        p.quantity_dispensed += req.quantity;
+        p.last_dispensed = Some(env.ledger().timestamp());
+
+        // Update status based on remaining quantity
+        if p.quantity_dispensed >= p.quantity {
+            p.status = PrescriptionStatus::Dispensed;
+        } else {
+            p.status = PrescriptionStatus::PartiallyDispensed;
+        }
+
+        env.storage().persistent().set(&req.prescription_id, &p);
+
+        // Emit dispense event
+        env.events().publish(
+            (Symbol::new(&env, "prescription_dispensed"),),
+            (req.prescription_id, pharmacy_id, req.quantity),
+        );
+
+        Ok(())
+    }
+
+    pub fn transfer_prescription(
+        env: Env,
+        req: TransferRequest,
+        from_pharmacy: Address,
+    ) -> Result<(), Error> {
+        from_pharmacy.require_auth();
+
+        let mut p: Prescription = env
+            .storage()
+            .persistent()
+            .get(&req.prescription_id)
+            .ok_or(Error::NotFound)?;
+
+        // Validate transfer reason
+        if req.transfer_reason.is_empty() {
+            return Err(Error::MissingTransferReason);
+        }
+
+        // Verify current pharmacy ownership
+        if let Some(current_pharmacy) = p.current_pharmacy {
+            if current_pharmacy != from_pharmacy {
+                return Err(Error::PharmacyNotAuthorized);
+            }
+        } else {
+            return Err(Error::TransferChainBroken);
+        }
+
+        // Validate prescription is transferable
+        if !matches!(p.status, PrescriptionStatus::Issued | PrescriptionStatus::Active | PrescriptionStatus::PartiallyDispensed) {
+            return Err(Error::InvalidStatusTransition);
+        }
+
+        // Check expiration
+        if env.ledger().timestamp() > p.valid_until {
+            return Err(Error::Expired);
+        }
+
+        // Transfer limits for controlled substances
+        if p.is_controlled && p.transfer_count >= 1 {
+            return Err(Error::ControlledSubstanceViolation);
+        }
+
+        // Create transfer record
+        let transfer_record = TransferRecord {
+            from_pharmacy: from_pharmacy.clone(),
+            to_pharmacy: req.to_pharmacy.clone(),
+            transfer_reason: req.transfer_reason.clone(),
+            transferred_at: env.ledger().timestamp(),
+            transferred_by: from_pharmacy.clone(),
+        };
+
+        // Update prescription
+        p.transfer_history.push_back(transfer_record);
+        p.transfer_count += 1;
+        p.current_pharmacy = Some(req.to_pharmacy.clone());
+        p.status = PrescriptionStatus::Transferred;
+
+        env.storage().persistent().set(&req.prescription_id, &p);
+
+        // Emit transfer event
+        env.events().publish(
+            (Symbol::new(&env, "prescription_transferred"),),
+            (req.prescription_id, from_pharmacy, req.to_pharmacy, req.transfer_reason),
+        );
+
+        Ok(())
+    }
+
+    pub fn accept_transfer(
+        env: Env,
         prescription_id: u64,
         pharmacy_id: Address,
-        _quantity: u32,
-        _lot: String,
-    ) {
+    ) -> Result<(), Error> {
         pharmacy_id.require_auth();
 
         let mut p: Prescription = env
             .storage()
             .persistent()
             .get(&prescription_id)
-            .expect("Prescription not found");
+            .ok_or(Error::NotFound)?;
 
-        if env.ledger().timestamp() > p.valid_until {
-            panic_with_error!(&env, Error::Expired);
+        // Verify pharmacy is the destination
+        if let Some(current_pharmacy) = p.current_pharmacy {
+            if current_pharmacy != pharmacy_id {
+                return Err(Error::PharmacyNotAuthorized);
+            }
+        } else {
+            return Err(Error::TransferChainBroken);
         }
 
-        p.status = PrescriptionStatus::Dispensed;
-        p.current_pharmacy = Some(pharmacy_id);
+        // Validate status
+        if !matches!(p.status, PrescriptionStatus::Transferred) {
+            return Err(Error::InvalidStatusTransition);
+        }
 
+        // Accept transfer and activate prescription
+        p.status = PrescriptionStatus::Active;
         env.storage().persistent().set(&prescription_id, &p);
-    }
 
-    pub fn transfer_prescription(
-        env: Env,
-        prescription_id: u64,
-        from_pharmacy: Address,
-        to_pharmacy: Address,
-    ) {
-        from_pharmacy.require_auth();
+        // Emit acceptance event
+        env.events().publish(
+            (Symbol::new(&env, "transfer_accepted"),),
+            (prescription_id, pharmacy_id),
+        );
 
-        let mut p: Prescription = env.storage().persistent().get(&prescription_id).unwrap();
-
-        p.current_pharmacy = Some(to_pharmacy);
-        p.status = PrescriptionStatus::Transferred;
-
-        env.storage().persistent().set(&prescription_id, &p);
+        Ok(())
     }
 
     pub fn register_medication(
@@ -485,6 +678,122 @@ impl PrescriptionContract {
             &DataKey::MedicationContraindications(medication),
             &contraindications,
         );
+        Ok(())
+    }
+
+    pub fn refill_prescription(
+        env: Env,
+        prescription_id: u64,
+        pharmacy_id: Address,
+        provider_id: Address,
+    ) -> Result<(), Error> {
+        pharmacy_id.require_auth();
+        provider_id.require_auth();
+
+        let mut p: Prescription = env
+            .storage()
+            .persistent()
+            .get(&prescription_id)
+            .ok_or(Error::NotFound)?;
+
+        // Validate prescription allows refills
+        if p.refills_allowed == 0 {
+            return Err(Error::RefillExceeded);
+        }
+
+        // Check remaining refills
+        if p.refills_remaining == 0 {
+            return Err(Error::RefillExceeded);
+        }
+
+        // Validate prescription is in refillable state
+        if !matches!(p.status, PrescriptionStatus::Active | PrescriptionStatus::PartiallyDispensed | PrescriptionStatus::Dispensed) {
+            return Err(Error::InvalidStatusTransition);
+        }
+
+        // Check expiration
+        if env.ledger().timestamp() > p.valid_until {
+            return Err(Error::Expired);
+        }
+
+        // Validate pharmacy authorization
+        if let Some(current_pharmacy) = p.current_pharmacy {
+            if current_pharmacy != pharmacy_id {
+                return Err(Error::PharmacyNotAuthorized);
+            }
+        } else {
+            return Err(Error::PharmacyNotAuthorized);
+        }
+
+        // Validate provider authorization
+        if p.provider_id != provider_id {
+            return Err(Error::Unauthorized);
+        }
+
+        // Decrement refills and reset quantity for new fill
+        p.refills_remaining -= 1;
+        p.refills_used += 1;
+        p.quantity_dispensed = 0;
+        p.status = PrescriptionStatus::Active;
+        p.last_dispensed = None;
+
+        // Extend validity if needed (30 days from refill)
+        let new_valid_until = env.ledger().timestamp() + (30 * 24 * 60 * 60); // 30 days in seconds
+        if new_valid_until > p.valid_until {
+            p.valid_until = new_valid_until;
+        }
+
+        env.storage().persistent().set(&prescription_id, &p);
+
+        // Emit refill event
+        env.events().publish(
+            (Symbol::new(&env, "prescription_refilled"),),
+            (prescription_id, pharmacy_id, provider_id, p.refills_remaining),
+        );
+
+        Ok(())
+    }
+
+    pub fn cancel_prescription(
+        env: Env,
+        prescription_id: u64,
+        provider_id: Address,
+        reason: String,
+    ) -> Result<(), Error> {
+        provider_id.require_auth();
+
+        let mut p: Prescription = env
+            .storage()
+            .persistent()
+            .get(&prescription_id)
+            .ok_or(Error::NotFound)?;
+
+        // Validate provider authorization
+        if p.provider_id != provider_id {
+            return Err(Error::Unauthorized);
+        }
+
+        // Only active or issued prescriptions can be cancelled
+        if !matches!(p.status, PrescriptionStatus::Issued | PrescriptionStatus::Active | PrescriptionStatus::PartiallyDispensed) {
+            return Err(Error::InvalidStatusTransition);
+        }
+
+        // Cannot cancel if already partially dispensed (unless for safety reasons)
+        if matches!(p.status, PrescriptionStatus::PartiallyDispensed) && p.quantity_dispensed > 0 {
+            if reason != String::from_str(&env, "safety_concern") && reason != String::from_str(&env, "adverse_reaction") {
+                return Err(Error::InvalidStatusTransition);
+            }
+        }
+
+        p.status = PrescriptionStatus::Cancelled;
+        env.storage().persistent().set(&prescription_id, &p);
+
+        // Emit cancellation event
+        env.events().publish(
+            (Symbol::new(&env, "prescription_cancelled"),),
+            (prescription_id, provider_id, reason),
+        );
+
         Ok(())
     }
 }

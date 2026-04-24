@@ -1,4 +1,6 @@
 #![cfg(test)]
+mod test;
+mod test_enhanced;
 
 use super::*;
 use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol, Vec};
