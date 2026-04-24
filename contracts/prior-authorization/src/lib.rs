@@ -8,11 +8,50 @@ mod types;
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Bytes, BytesN, Env, String, Symbol, Vec};
 use storage::*;
 use types::*;
 
 const MAX_APPEAL_LEVEL: u32 = 3;
+
+fn compute_review_entry_hash(env: &Env, review: &ReviewRecord) -> BytesN<32> {
+    let mut data = Bytes::new(env);
+    data.extend_from_array(&review.review_id.to_be_bytes());
+    data.extend_from_array(&review.auth_request_id.to_be_bytes());
+    data.append(&review.reviewer_id.clone().to_xdr(env));
+    data.append(&review.decision.clone().to_xdr(env));
+    data.append(&review.review_notes_hash.clone().to_xdr(env));
+    if let Some(prev_hash) = &review.prior_review_hash {
+        data.append(&prev_hash.clone().to_xdr(env));
+    }
+    data.extend_from_array(&review.timestamp.to_be_bytes());
+    env.crypto().sha256(&data)
+}
+
+fn compute_appeal_chain_hash(
+    env: &Env,
+    previous_appeal_hash: Option<BytesN<32>>,
+    ruling_dependency_hash: BytesN<32>,
+    appeal_reason_hash: BytesN<32>,
+    additional_evidence_hash: Option<BytesN<32>>,
+    provider_id: &Address,
+    appeal_level: u32,
+    submitted_at: u64,
+) -> BytesN<32> {
+    let mut data = Bytes::new(env);
+    if let Some(prev) = previous_appeal_hash {
+        data.append(&prev.clone().to_xdr(env));
+    }
+    data.append(&ruling_dependency_hash.clone().to_xdr(env));
+    data.append(&appeal_reason_hash.clone().to_xdr(env));
+    if let Some(additional) = additional_evidence_hash {
+        data.append(&additional.clone().to_xdr(env));
+    }
+    data.append(&provider_id.clone().to_xdr(env));
+    data.extend_from_array(&appeal_level.to_be_bytes());
+    data.extend_from_array(&submitted_at.to_be_bytes());
+    env.crypto().sha256(&data)
+}
 
 #[contract]
 pub struct PriorAuthorizationContract;
@@ -229,11 +268,41 @@ impl PriorAuthorizationContract {
 
         req.decision = Some(decision.clone());
 
+        // Persist review history in an append-only sequence.
+        let history = load_review_history(&env, auth_request_id);
+        let prior_review_hash = if history.is_empty() {
+            None
+        } else {
+            let last_review = history.get(history.len() - 1).unwrap();
+            Some(last_review.review_entry_hash.clone())
+        };
+        let review_notes_hash = env
+            .crypto()
+            .sha256(&review_notes.clone().to_xdr(&env));
+        let review_id = next_review_id(&env);
+        let mut review_record = ReviewRecord {
+            review_id,
+            auth_request_id,
+            reviewer_id: reviewer_id.clone(),
+            decision: decision.clone(),
+            review_notes_hash,
+            prior_review_hash,
+            review_entry_hash: BytesN::from_array(&env, &[0u8; 32]),
+            timestamp: env.ledger().timestamp(),
+        };
+        review_record.review_entry_hash = compute_review_entry_hash(&env, &review_record);
+        save_review_record(&env, &review_record);
+
         save_auth_request(&env, &req);
 
         env.events().publish(
             (Symbol::new(&env, "auth_reviewed"),),
-            (auth_request_id, decision, reviewer_id, reviewer.role),
+            (
+                auth_request_id,
+                decision,
+                reviewer_id,
+                review_record.review_entry_hash,
+            ),
         );
 
         Ok(())
@@ -358,6 +427,39 @@ impl PriorAuthorizationContract {
 
         let appeal_id = next_appeal_id(&env);
 
+        let previous_appeal_id = if existing.is_empty() {
+            None
+        } else {
+            Some(existing.get(existing.len() - 1).unwrap().appeal_id)
+        };
+        let previous_appeal_hash = if existing.is_empty() {
+            None
+        } else {
+            Some(existing.get(existing.len() - 1).unwrap().appeal_chain_hash.clone())
+        };
+
+        let review_history = load_review_history(&env, auth_request_id);
+        let ruling_dependency_hash = if review_history.is_empty() {
+            env.crypto().sha256(&Bytes::new(&env))
+        } else {
+            review_history
+                .get(review_history.len() - 1)
+                .unwrap()
+                .review_entry_hash
+                .clone()
+        };
+
+        let appeal_chain_hash = compute_appeal_chain_hash(
+            &env,
+            previous_appeal_hash.clone(),
+            ruling_dependency_hash.clone(),
+            appeal_reason_hash.clone(),
+            additional_evidence_hash.clone(),
+            &provider_id,
+            appeal_level,
+            env.ledger().timestamp(),
+        );
+
         let appeal = Appeal {
             appeal_id,
             auth_request_id,
@@ -366,6 +468,10 @@ impl PriorAuthorizationContract {
             appeal_reason_hash,
             additional_evidence_hash,
             submitted_at: env.ledger().timestamp(),
+            previous_appeal_id,
+            previous_appeal_hash,
+            ruling_dependency_hash,
+            appeal_chain_hash,
         };
 
         save_appeal(&env, &appeal);
@@ -539,187 +645,23 @@ impl PriorAuthorizationContract {
         })
     }
 
-    /// Register a new reviewer in the system
-    pub fn register_reviewer(
+    /// Return the full appeal timeline for an authorization request.
+    pub fn get_appeal_history(
         env: Env,
-        insurer_id: Address,
-        reviewer_id: Address,
-        role: Symbol,
-        specialties: Vec<Symbol>,
-        max_cases: u32,
-        expires_at: Option<u64>,
-    ) -> Result<(), Error> {
-        insurer_id.require_auth();
-
-        let reviewer = Reviewer {
-            reviewer_id: reviewer_id.clone(),
-            insurer_id: insurer_id.clone(),
-            role: role.clone(),
-            specialties,
-            max_cases,
-            current_cases: 0,
-            authorized_at: env.ledger().timestamp(),
-            expires_at,
-            is_active: true,
-        };
-
-        save_reviewer(&env, &reviewer);
-
-        env.events().publish(
-            (Symbol::new(&env, "reviewer_registered"),),
-            (reviewer_id, insurer_id, role),
-        );
-
-        Ok(())
+        auth_request_id: u64,
+        requester: Address,
+    ) -> Result<Vec<Appeal>, Error> {
+        requester.require_auth();
+        Ok(load_appeals_for_auth(&env, auth_request_id))
     }
 
-    /// Update reviewer status and case limits
-    pub fn update_reviewer(
+    /// Return the full review history for an authorization request.
+    pub fn get_review_history(
         env: Env,
-        insurer_id: Address,
-        reviewer_id: Address,
-        is_active: Option<bool>,
-        max_cases: Option<u32>,
-        expires_at: Option<u64>,
-    ) -> Result<(), Error> {
-        insurer_id.require_auth();
-
-        let mut reviewer = load_reviewer(&env, &reviewer_id)
-            .ok_or(Error::ReviewerNotFound)?;
-
-        // Verify insurer owns this reviewer
-        if reviewer.insurer_id != insurer_id {
-            return Err(Error::Unauthorized);
-        }
-
-        if let Some(active) = is_active {
-            reviewer.is_active = active;
-        }
-
-        if let Some(max) = max_cases {
-            reviewer.max_cases = max;
-        }
-
-        if let Some(expiry) = expires_at {
-            reviewer.expires_at = Some(expiry);
-        }
-
-        save_reviewer(&env, &reviewer);
-
-        env.events().publish(
-            (Symbol::new(&env, "reviewer_updated"),),
-            (reviewer_id, insurer_id),
-        );
-
-        Ok(())
-    }
-
-    /// Configure SLA settings for different urgency levels
-    pub fn configure_sla(
-        env: Env,
-        insurer_id: Address,
-        urgency: Symbol,
-        standard_deadline_hours: u64,
-        expedited_deadline_hours: u64,
-        auto_approval_threshold: u32,
-        requires_medical_director: bool,
-    ) -> Result<(), Error> {
-        insurer_id.require_auth();
-
-        let config = SLAConfig {
-            urgency: urgency.clone(),
-            standard_deadline_hours,
-            expedited_deadline_hours,
-            auto_approval_threshold,
-            requires_medical_director,
-        };
-
-        save_sla_config(&env, &config);
-
-        env.events().publish(
-            (Symbol::new(&env, "sla_configured"),),
-            (insurer_id, urgency, standard_deadline_hours),
-        );
-
-        Ok(())
-    }
-
-    /// Process overdue authorizations and apply automatic transitions
-    pub fn process_overdue_authorizations(env: Env, insurer_id: Address) -> Result<Vec<u64>, Error> {
-        insurer_id.require_auth();
-
-        let overdue_auths = get_overdue_auths(&env);
-        let mut processed = Vec::new(&env);
-        let current_time = env.ledger().timestamp();
-
-        for &auth_id in overdue_auths.iter() {
-            if let Some(mut req) = load_auth_request(&env, auth_id) {
-                if current_time > req.sla_deadline {
-                    // Check if auto-approval is eligible
-                    if req.auto_review_eligible && req.status == AuthStatus::Submitted {
-                        // Auto-approve with conservative limits
-                        req.status = AuthStatus::Approved;
-                        req.approved_units = Some(10); // Conservative default
-                        req.valid_from = Some(current_time);
-                        req.valid_until = Some(current_time + (30 * 24 * 60 * 60)); // 30 days
-                        req.decision_date = Some(current_time);
-                        req.decision = Some(Symbol::new(&env, "auto_approved"));
-                        
-                        save_auth_request(&env, &req);
-                        remove_overdue_auth(&env, auth_id);
-                        processed.push_back(auth_id);
-
-                        env.events().publish(
-                            (Symbol::new(&env, "auto_approved"),),
-                            (auth_id, req.sla_deadline),
-                        );
-                    } else {
-                        // Escalate to medical director or mark as violation
-                        req.status = AuthStatus::UnderReview;
-                        save_auth_request(&env, &req);
-                        processed.push_back(auth_id);
-
-                        env.events().publish(
-                            (Symbol::new(&env, "sla_violation"),),
-                            (auth_id, req.sla_deadline, current_time),
-                        );
-                    }
-                }
-            }
-        }
-
-        Ok(processed)
-    }
-
-    /// Get reviewer workload and authorization statistics
-    pub fn get_reviewer_stats(
-        env: Env,
-        insurer_id: Address,
-        reviewer_id: Address,
-    ) -> Result<ReviewerStats, Error> {
-        insurer_id.require_auth();
-
-        let reviewer = load_reviewer(&env, &reviewer_id)
-            .ok_or(Error::ReviewerNotFound)?;
-
-        if reviewer.insurer_id != insurer_id {
-            return Err(Error::Unauthorized);
-        }
-
-        let stats = ReviewerStats {
-            reviewer_id,
-            role: reviewer.role,
-            current_cases: reviewer.current_cases,
-            max_cases: reviewer.max_cases,
-            utilization_ratio: if reviewer.max_cases > 0 {
-                (reviewer.current_cases as f64) / (reviewer.max_cases as f64)
-            } else {
-                0.0
-            },
-            is_active: reviewer.is_active,
-            expires_at: reviewer.expires_at,
-        };
-
-        Ok(stats)
+        auth_request_id: u64,
+        requester: Address,
+    ) -> Result<Vec<ReviewRecord>, Error> {
+        requester.require_auth();
+        Ok(load_review_history(&env, auth_request_id))
     }
 }

@@ -2,7 +2,7 @@ use soroban_sdk::{Address, Env, Vec, Symbol};
 
 use crate::types::{
     Appeal, AuthorizationRequest, DataKey, ExtensionRequest, PeerToPeerRequest,
-    SupportingDocument, UsageRecord, Reviewer, SLAConfig,
+    ReviewRecord, SupportingDocument, UsageRecord,
 };
 
 // -----------------------------------------------------------------------
@@ -32,6 +32,19 @@ pub fn next_appeal_id(env: &Env) -> u64 {
     env.storage()
         .persistent()
         .set(&DataKey::AppealCounter, &next);
+    next
+}
+
+pub fn next_review_id(env: &Env) -> u64 {
+    let id: u64 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::ReviewCounter)
+        .unwrap_or(0);
+    let next = id + 1;
+    env.storage()
+        .persistent()
+        .set(&DataKey::ReviewCounter, &next);
     next
 }
 
@@ -133,6 +146,33 @@ pub fn load_appeals_for_auth(env: &Env, auth_request_id: u64) -> Vec<Appeal> {
     env.storage()
         .persistent()
         .get(&DataKey::Appeals(auth_request_id))
+        .unwrap_or(Vec::new(env))
+}
+
+// -----------------------------------------------------------------------
+// Review records
+// -----------------------------------------------------------------------
+
+pub fn save_review_record(env: &Env, review: &ReviewRecord) {
+    env.storage()
+        .persistent()
+        .set(&DataKey::Review(review.review_id), review);
+
+    let mut history: Vec<ReviewRecord> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::ReviewHistory(review.auth_request_id))
+        .unwrap_or(Vec::new(env));
+    history.push_back(review.clone());
+    env.storage()
+        .persistent()
+        .set(&DataKey::ReviewHistory(review.auth_request_id), &history);
+}
+
+pub fn load_review_history(env: &Env, auth_request_id: u64) -> Vec<ReviewRecord> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::ReviewHistory(auth_request_id))
         .unwrap_or(Vec::new(env))
 }
 

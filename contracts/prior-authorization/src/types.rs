@@ -116,6 +116,20 @@ pub struct PeerToPeerRequest {
     pub medical_director: Option<Address>,
 }
 
+/// A recorded review decision for an authorization request.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewRecord {
+    pub review_id: u64,
+    pub auth_request_id: u64,
+    pub reviewer_id: Address,
+    pub decision: Symbol,
+    pub review_notes_hash: BytesN<32>,
+    pub prior_review_hash: Option<BytesN<32>>,
+    pub review_entry_hash: BytesN<32>,
+    pub timestamp: u64,
+}
+
 /// An appeal against a denied authorization.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -127,6 +141,10 @@ pub struct Appeal {
     pub appeal_reason_hash: BytesN<32>,
     pub additional_evidence_hash: Option<BytesN<32>>,
     pub submitted_at: u64,
+    pub previous_appeal_id: Option<u64>,
+    pub previous_appeal_hash: Option<BytesN<32>>,
+    pub ruling_dependency_hash: BytesN<32>,
+    pub appeal_chain_hash: BytesN<32>,
 }
 
 /// An extension request for an existing authorization.
@@ -197,6 +215,8 @@ pub enum DataKey {
     AuthCounter,
     /// Auto-increment counter for appeals.
     AppealCounter,
+    /// Auto-increment counter for reviews.
+    ReviewCounter,
     /// auth_request_id -> AuthorizationRequest
     AuthRequest(u64),
     /// auth_request_id -> Vec<SupportingDocument>
@@ -207,6 +227,10 @@ pub enum DataKey {
     Appeals(u64),
     /// appeal_id -> Appeal
     Appeal(u64),
+    /// auth_request_id -> Vec<ReviewRecord>
+    ReviewHistory(u64),
+    /// review_id -> ReviewRecord
+    Review(u64),
     /// auth_request_id -> ExtensionRequest
     Extension(u64),
     /// auth_request_id -> Vec<UsageRecord>
