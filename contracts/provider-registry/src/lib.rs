@@ -1,51 +1,71 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, symbol_short, Address, Env, String};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, contracterror, symbol_short, Address, Env, String,
+};
 
 mod test;
 
+// ── Errors ────────────────────────────────────────────────────────────────────
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum Error {
+    AlreadyInitialized = 1,
+    NotInitialized     = 2,
+    Unauthorized       = 3,
+    NotAProvider       = 4,
+    RecordNotFound     = 5,
+}
+
+// ── Storage keys ──────────────────────────────────────────────────────────────
+
 #[contracttype]
 pub enum DataKey {
+    Initialized,
     Admin,
     Provider(Address),
     Record(String),
 }
+
+// ── Contract ──────────────────────────────────────────────────────────────────
 
 #[contract]
 pub struct ProviderRegistry;
 
 #[contractimpl]
 impl ProviderRegistry {
-    /// Initialize the contract with an admin address.
-    pub fn initialize(env: Env, admin: Address) {
-        if env.storage().persistent().has(&DataKey::Admin) {
-            panic!("Already initialized");
-        }
+    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+        Self::assert_not_initialized(&env)?;
         admin.require_auth();
         env.storage().persistent().set(&DataKey::Admin, &admin);
+        env.storage().persistent().set(&DataKey::Initialized, &true);
+        Ok(())
     }
 
-    /// Whitelist a provider address. Admin only.
-    pub fn register_provider(env: Env, admin: Address, provider: Address) {
-        Self::assert_admin(&env, &admin);
+    pub fn register_provider(env: Env, admin: Address, provider: Address) -> Result<(), Error> {
+        Self::assert_initialized(&env)?;
+        Self::assert_admin(&env, &admin)?;
         env.storage()
             .persistent()
             .set(&DataKey::Provider(provider.clone()), &true);
         env.events()
             .publish((symbol_short!("reg_prov"), provider), symbol_short!("ok"));
+        Ok(())
     }
 
-    /// Remove a provider from the whitelist. Admin only.
-    pub fn revoke_provider(env: Env, admin: Address, provider: Address) {
-        Self::assert_admin(&env, &admin);
+    pub fn revoke_provider(env: Env, admin: Address, provider: Address) -> Result<(), Error> {
+        Self::assert_initialized(&env)?;
+        Self::assert_admin(&env, &admin)?;
         env.storage()
             .persistent()
             .remove(&DataKey::Provider(provider.clone()));
         env.events()
             .publish((symbol_short!("rev_prov"), provider), symbol_short!("ok"));
+        Ok(())
     }
 
-    /// Returns true if the address is a whitelisted provider.
     pub fn is_provider(env: Env, provider: Address) -> bool {
         env.storage()
             .persistent()
@@ -53,38 +73,58 @@ impl ProviderRegistry {
             .unwrap_or(false)
     }
 
-    /// Add a medical record. Caller must be a whitelisted provider.
-    pub fn add_record(env: Env, provider: Address, record_id: String, data: String) {
+    pub fn add_record(
+        env: Env,
+        provider: Address,
+        record_id: String,
+        data: String,
+    ) -> Result<(), Error> {
+        Self::assert_initialized(&env)?;
         provider.require_auth();
         if !Self::is_provider(env.clone(), provider.clone()) {
-            panic!("Unauthorized: not a whitelisted provider");
+            return Err(Error::NotAProvider);
         }
         env.storage()
             .persistent()
             .set(&DataKey::Record(record_id.clone()), &data);
         env.events()
             .publish((symbol_short!("add_rec"), provider, record_id), symbol_short!("ok"));
+        Ok(())
     }
 
-    /// Retrieve a medical record by ID.
-    pub fn get_record(env: Env, record_id: String) -> String {
+    pub fn get_record(env: Env, record_id: String) -> Result<String, Error> {
         env.storage()
             .persistent()
             .get(&DataKey::Record(record_id))
-            .expect("Record not found")
+            .ok_or(Error::RecordNotFound)
     }
 
-    // ── helpers ──────────────────────────────────────────────────────────────
+    // ── guards ────────────────────────────────────────────────────────────────
 
-    fn assert_admin(env: &Env, caller: &Address) {
+    fn assert_initialized(env: &Env) -> Result<(), Error> {
+        if !env.storage().persistent().has(&DataKey::Initialized) {
+            return Err(Error::NotInitialized);
+        }
+        Ok(())
+    }
+
+    fn assert_not_initialized(env: &Env) -> Result<(), Error> {
+        if env.storage().persistent().has(&DataKey::Initialized) {
+            return Err(Error::AlreadyInitialized);
+        }
+        Ok(())
+    }
+
+    fn assert_admin(env: &Env, caller: &Address) -> Result<(), Error> {
         caller.require_auth();
         let admin: Address = env
             .storage()
             .persistent()
             .get(&DataKey::Admin)
-            .expect("Not initialized");
+            .ok_or(Error::NotInitialized)?;
         if *caller != admin {
-            panic!("Unauthorized: admin only");
+            return Err(Error::Unauthorized);
         }
+        Ok(())
     }
 }
