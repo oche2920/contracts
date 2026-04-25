@@ -5,20 +5,11 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
     xdr::ToXdr, Address, Bytes, BytesN, Env, Map, String, Symbol, Vec,
 };
+use ttl_config::critical::{LEDGER_BUMP_AMOUNT, LEDGER_THRESHOLD};
 
 pub mod merkle;
 pub mod validation;
 pub const NEW_RECORD_TOPIC: &str = "new_record";
-
-// =====================================================
-//                    TTL CONSTANTS
-// =====================================================
-
-/// Bump persistent entries by ~31 days (535,680 ledgers at ~5s/ledger).
-pub const LEDGER_BUMP_AMOUNT: u32 = 535_680;
-
-/// Extend TTL when fewer than ~30 days remain (518,400 ledgers).
-pub const LEDGER_THRESHOLD: u32 = 518_400;
 
 /// --------------------
 /// Patient Status
