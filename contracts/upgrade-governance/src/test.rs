@@ -21,10 +21,10 @@ fn dummy_hash(env: &Env) -> BytesN<32> {
 fn setup(n: u32, threshold: u32) -> (Env, Vec<Address>, UpgradeGovernanceClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, UpgradeGovernance);
+    let contract_id = env.register(UpgradeGovernance, ());
     let client = UpgradeGovernanceClient::new(&env, &contract_id);
     let signers = make_signers(&env, n);
-    client.initialize(&signers, &threshold).unwrap();
+    client.initialize(&signers, &threshold);
     (env, signers, client)
 }
 
@@ -32,7 +32,7 @@ fn setup(n: u32, threshold: u32) -> (Env, Vec<Address>, UpgradeGovernanceClient<
 
 #[test]
 fn test_double_initialize_returns_error() {
-    let (env, signers, client) = setup(3, 2);
+    let (_env, signers, client) = setup(3, 2);
     let err = client.try_initialize(&signers, &2u32).unwrap_err().unwrap();
     assert_eq!(err, Error::AlreadyInitialized);
 }
@@ -41,7 +41,7 @@ fn test_double_initialize_returns_error() {
 fn test_invalid_threshold_returns_error() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, UpgradeGovernance);
+    let contract_id = env.register(UpgradeGovernance, ());
     let client = UpgradeGovernanceClient::new(&env, &contract_id);
     let signers = make_signers(&env, 2);
     let err = client.try_initialize(&signers, &3u32).unwrap_err().unwrap();
@@ -52,7 +52,7 @@ fn test_invalid_threshold_returns_error() {
 fn test_propose_before_init_returns_error() {
     let env = Env::default();
     env.mock_all_auths();
-    let contract_id = env.register_contract(None, UpgradeGovernance);
+    let contract_id = env.register(UpgradeGovernance, ());
     let client = UpgradeGovernanceClient::new(&env, &contract_id);
     let signer = Address::generate(&env);
     let err = client
@@ -79,12 +79,23 @@ fn test_non_signer_propose_returns_error() {
 fn test_propose_returns_incrementing_ids() {
     let (env, signers, client) = setup(3, 2);
     let s0 = signers.get(0).unwrap();
-    let id0 = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
-    let id1 = client
-        .propose_upgrade(&s0, &BytesN::from_array(&env, &[2u8; 32]))
-        .unwrap();
+    let id0 = client.propose_upgrade(&s0, &dummy_hash(&env));
+    let id1 = client.propose_upgrade(&s0, &BytesN::from_array(&env, &[2u8; 32]));
     assert_eq!(id0, 0);
     assert_eq!(id1, 1);
+}
+
+// ── domain tag ────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_domain_tags_differ_per_proposal() {
+    let (env, signers, client) = setup(3, 2);
+    let s0 = signers.get(0).unwrap();
+    let id0 = client.propose_upgrade(&s0, &dummy_hash(&env));
+    let id1 = client.propose_upgrade(&s0, &BytesN::from_array(&env, &[2u8; 32]));
+    let p0 = client.get_proposal(&id0);
+    let p1 = client.get_proposal(&id1);
+    assert_ne!(p0.domain_tag, p1.domain_tag, "domain tags must differ per proposal");
 }
 
 // ── vote ──────────────────────────────────────────────────────────────────────
@@ -94,7 +105,7 @@ fn test_non_signer_vote_returns_error() {
     let (env, signers, client) = setup(3, 2);
     let s0 = signers.get(0).unwrap();
     let stranger = Address::generate(&env);
-    let id = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
     let err = client.try_vote_upgrade(&stranger, &id).unwrap_err().unwrap();
     assert_eq!(err, Error::NotASigner);
 }
@@ -104,8 +115,8 @@ fn test_duplicate_vote_returns_error() {
     let (env, signers, client) = setup(3, 3);
     let s0 = signers.get(0).unwrap();
     let s1 = signers.get(1).unwrap();
-    let id = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
-    client.vote_upgrade(&s1, &id).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
+    client.vote_upgrade(&s1, &id);
     let err = client.try_vote_upgrade(&s1, &id).unwrap_err().unwrap();
     assert_eq!(err, Error::AlreadyVoted);
 }
@@ -115,53 +126,115 @@ fn test_vote_after_expiry_returns_error() {
     let (env, signers, client) = setup(3, 3);
     let s0 = signers.get(0).unwrap();
     let s1 = signers.get(1).unwrap();
-    let id = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
     env.ledger().with_mut(|li| { li.timestamp += VOTING_WINDOW + 1; });
     let err = client.try_vote_upgrade(&s1, &id).unwrap_err().unwrap();
     assert_eq!(err, Error::Expired);
 }
 
-// ── execute: vote fail (under threshold) ─────────────────────────────────────
+// ── timelock ──────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_execute_before_timelock_returns_error() {
+    let (env, signers, client) = setup(3, 2);
+    let s0 = signers.get(0).unwrap();
+    let s1 = signers.get(1).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
+    client.vote_upgrade(&s1, &id);
+    // Threshold reached but timelock not elapsed.
+    let err = client.try_execute_upgrade(&s0, &id).unwrap_err().unwrap();
+    assert_eq!(err, Error::TimelockActive);
+}
+
+#[test]
+fn test_execute_after_timelock_passes_governance_checks() {
+    let (env, signers, client) = setup(3, 2);
+    let s0 = signers.get(0).unwrap();
+    let s1 = signers.get(1).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
+    client.vote_upgrade(&s1, &id);
+    // Advance past the timelock.
+    env.ledger().with_mut(|li| { li.timestamp += TIMELOCK_DELAY + 1; });
+    // Governance checks pass; deployer panics on dummy hash — that's expected.
+    // We verify the error is NOT a governance error.
+    let result = client.try_execute_upgrade(&s0, &id);
+    match result {
+        Err(Ok(e)) => {
+            assert!(
+                e != Error::TimelockActive
+                    && e != Error::ThresholdNotMet
+                    && e != Error::Expired
+                    && e != Error::AlreadyExecuted,
+                "unexpected governance error: {e:?}"
+            );
+        }
+        // Panics from the deployer are also acceptable.
+        _ => {}
+    }
+}
+
+// ── cancellation ──────────────────────────────────────────────────────────────
+
+#[test]
+fn test_cancel_active_proposal() {
+    let (env, signers, client) = setup(3, 3);
+    let s0 = signers.get(0).unwrap();
+    let s1 = signers.get(1).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
+    client.cancel_upgrade(&s1, &id);
+    let proposal = client.get_proposal(&id);
+    assert_eq!(proposal.status, ProposalStatus::Cancelled);
+}
+
+#[test]
+fn test_cancel_approved_proposal_during_timelock() {
+    let (env, signers, client) = setup(3, 2);
+    let s0 = signers.get(0).unwrap();
+    let s1 = signers.get(1).unwrap();
+    let s2 = signers.get(2).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
+    client.vote_upgrade(&s1, &id);
+    // Proposal is now Approved; cancel during timelock window.
+    client.cancel_upgrade(&s2, &id);
+    let proposal = client.get_proposal(&id);
+    assert_eq!(proposal.status, ProposalStatus::Cancelled);
+}
+
+#[test]
+fn test_vote_on_cancelled_proposal_returns_error() {
+    let (env, signers, client) = setup(3, 3);
+    let s0 = signers.get(0).unwrap();
+    let s1 = signers.get(1).unwrap();
+    let s2 = signers.get(2).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
+    client.cancel_upgrade(&s1, &id);
+    let err = client.try_vote_upgrade(&s2, &id).unwrap_err().unwrap();
+    assert_eq!(err, Error::Cancelled);
+}
+
+#[test]
+fn test_execute_cancelled_proposal_returns_error() {
+    let (env, signers, client) = setup(3, 2);
+    let s0 = signers.get(0).unwrap();
+    let s1 = signers.get(1).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
+    client.vote_upgrade(&s1, &id);
+    client.cancel_upgrade(&s0, &id);
+    env.ledger().with_mut(|li| { li.timestamp += TIMELOCK_DELAY + 1; });
+    let err = client.try_execute_upgrade(&s0, &id).unwrap_err().unwrap();
+    assert_eq!(err, Error::Cancelled);
+}
+
+// ── execute: under threshold ──────────────────────────────────────────────────
 
 #[test]
 fn test_execute_under_threshold_returns_error() {
     let (env, signers, client) = setup(3, 3);
     let s0 = signers.get(0).unwrap();
-    let id = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
+    env.ledger().with_mut(|li| { li.timestamp += TIMELOCK_DELAY + 1; });
     let err = client.try_execute_upgrade(&s0, &id).unwrap_err().unwrap();
     assert_eq!(err, Error::ThresholdNotMet);
-}
-
-// ── execute: vote pass (at threshold) ────────────────────────────────────────
-
-#[test]
-fn test_execute_passes_threshold_check() {
-    let (env, signers, client) = setup(3, 2);
-    let s0 = signers.get(0).unwrap();
-    let s1 = signers.get(1).unwrap();
-    let id = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
-    client.vote_upgrade(&s1, &id).unwrap();
-
-    // Governance checks pass; deployer panics on dummy hash — that's expected.
-    let result = std::panic::catch_unwind(|| {
-        client.execute_upgrade(&s0, &id).unwrap();
-    });
-    match result {
-        Err(e) => {
-            let msg = e
-                .downcast_ref::<String>()
-                .map(|s| s.as_str())
-                .or_else(|| e.downcast_ref::<&str>().copied())
-                .unwrap_or("");
-            assert!(
-                !msg.contains("ThresholdNotMet")
-                    && !msg.contains("Expired")
-                    && !msg.contains("AlreadyExecuted"),
-                "unexpected governance error: {msg}"
-            );
-        }
-        Ok(_) => {}
-    }
 }
 
 // ── execute: expired ─────────────────────────────────────────────────────────
@@ -171,8 +244,8 @@ fn test_execute_expired_returns_error() {
     let (env, signers, client) = setup(3, 2);
     let s0 = signers.get(0).unwrap();
     let s1 = signers.get(1).unwrap();
-    let id = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
-    client.vote_upgrade(&s1, &id).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
+    client.vote_upgrade(&s1, &id);
     env.ledger().with_mut(|li| { li.timestamp += VOTING_WINDOW + 1; });
     let err = client.try_execute_upgrade(&s0, &id).unwrap_err().unwrap();
     assert_eq!(err, Error::Expired);
@@ -186,10 +259,10 @@ fn test_vote_on_executed_proposal_returns_error() {
     let s0 = signers.get(0).unwrap();
     let s1 = signers.get(1).unwrap();
     let s2 = signers.get(2).unwrap();
-    let id = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
-    client.vote_upgrade(&s1, &id).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
+    client.vote_upgrade(&s1, &id);
 
-    let mut proposal: UpgradeProposal = client.get_proposal(&id).unwrap();
+    let mut proposal: UpgradeProposal = client.get_proposal(&id);
     proposal.status = ProposalStatus::Executed;
     env.as_contract(&client.address, || {
         env.storage()
