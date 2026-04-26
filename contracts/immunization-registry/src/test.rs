@@ -31,8 +31,8 @@ fn test_record_immunization() {
 
     assert_eq!(id, 1);
 
-    let requester = Address::generate(&env);
-    let history = client.get_immunization_history(&patient_id, &requester);
+    let _requester = Address::generate(&env);
+    let history = client.get_immunization_history(&patient_id, &patient_id);
 
     assert_eq!(history.len(), 1);
     let record = history.get(0).unwrap();
@@ -109,7 +109,7 @@ fn test_vaccine_series_and_due() {
     );
 
     // Initially, they are due for it
-    let due = client.check_due_vaccines(&patient_id, &1690000000);
+    let due = client.check_due_vaccines(&patient_id, &patient_id, &1690000000);
     assert_eq!(due.len(), 1);
 
     // Record one dose
@@ -128,7 +128,7 @@ fn test_vaccine_series_and_due() {
     });
 
     // Still due (need 3)
-    let due2 = client.check_due_vaccines(&patient_id, &1695000000);
+    let due2 = client.check_due_vaccines(&patient_id, &patient_id, &1695000000);
     assert_eq!(due2.len(), 1);
 
     // Record two more doses
@@ -160,6 +160,6 @@ fn test_vaccine_series_and_due() {
     });
 
     // Now they should NOT be due
-    let due3 = client.check_due_vaccines(&patient_id, &1700000000);
+    let due3 = client.check_due_vaccines(&patient_id, &patient_id, &1700000000);
     assert_eq!(due3.len(), 0);
 }

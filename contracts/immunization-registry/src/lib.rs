@@ -86,6 +86,9 @@ impl ImmunizationRegistry {
         requester: Address,
     ) -> Result<Vec<VaccineRecord>, Error> {
         requester.require_auth();
+        if requester != patient_id {
+            return Err(Error::NotAuthorized);
+        }
 
         let record_ids: Vec<u64> = env
             .storage()
@@ -138,8 +141,13 @@ impl ImmunizationRegistry {
     pub fn check_due_vaccines(
         env: Env,
         patient_id: Address,
+        requester: Address,
         _current_date: u64,
     ) -> Result<Vec<VaccineSeries>, Error> {
+        requester.require_auth();
+        if requester != patient_id {
+            return Err(Error::NotAuthorized);
+        }
         // For the sake of this functionality without complex date logic in the smart contract,
         // we determine if a series is due by counting the number of records a patient has
         // for that series (matched by a heuristic, like cvx_code or sequence counting).

@@ -111,7 +111,7 @@ fn test_emergency_access_request() {
     assert_eq!(profile.emergency_contacts.len(), 2);
 
     // Verify access was logged
-    let logs = client.get_emergency_access_logs(&patient);
+    let logs = client.get_emergency_access_logs(&patient, &patient);
     assert_eq!(logs.len(), 1);
     assert_eq!(logs.get(0).unwrap().provider_id, provider);
     assert_eq!(logs.get(0).unwrap().emergency_type, emergency_type);
@@ -133,7 +133,7 @@ fn test_add_critical_alert() {
 
     client.add_critical_alert(&patient, &provider, &alert_type, &alert_text, &severity);
 
-    let alerts = client.get_critical_alerts(&patient);
+    let alerts = client.get_critical_alerts(&patient, &patient);
     assert_eq!(alerts.len(), 1);
     assert_eq!(alerts.get(0).unwrap().alert_type, alert_type);
     assert_eq!(alerts.get(0).unwrap().severity, severity);
@@ -166,7 +166,7 @@ fn test_multiple_critical_alerts() {
         &Symbol::new(&env, "CRITICAL"),
     );
 
-    let alerts = client.get_critical_alerts(&patient);
+    let alerts = client.get_critical_alerts(&patient, &patient);
     assert_eq!(alerts.len(), 2);
 }
 
@@ -241,7 +241,7 @@ fn test_record_dnr_order() {
     client.record_dnr_order(&patient, &provider, &dnr_hash, &effective_date);
 
     // Verify DNR was recorded
-    let dnr = client.get_dnr_order(&patient);
+    let dnr = client.get_dnr_order(&patient, &patient);
     assert!(dnr.is_some());
     assert_eq!(dnr.unwrap().dnr_document_hash, dnr_hash);
 
@@ -277,12 +277,11 @@ fn test_dnr_with_advance_directives() {
     );
 
     // Verify DNR was created with advance directives
-    let dnr = client.get_dnr_order(&patient);
+    let dnr = client.get_dnr_order(&patient, &patient);
     assert!(dnr.is_some());
 }
 
 #[test]
-#[should_panic(expected = "Emergency profile not found")]
 fn test_emergency_access_without_profile() {
     let env = Env::default();
     let contract_id = env.register_contract(None, EmergencyMedicalInfo);
@@ -293,13 +292,14 @@ fn test_emergency_access_without_profile() {
     env.mock_all_auths();
 
     // Try to access without profile
-    client.emergency_access_request(
+    let result = client.try_emergency_access_request(
         &provider,
         &patient,
         &Symbol::new(&env, "TRAUMA"),
         &String::from_str(&env, "Emergency"),
         &String::from_str(&env, "ER"),
     );
+    assert_eq!(result, Err(Ok(Error::EmergencyProfileNotFound)));
 }
 
 #[test]
@@ -348,7 +348,7 @@ fn test_emergency_access_audit_trail() {
     );
 
     // Verify audit trail
-    let logs = client.get_emergency_access_logs(&patient);
+    let logs = client.get_emergency_access_logs(&patient, &patient);
     assert_eq!(logs.len(), 2);
     assert_eq!(logs.get(0).unwrap().provider_id, provider1);
     assert_eq!(logs.get(1).unwrap().provider_id, provider2);
@@ -451,9 +451,9 @@ fn test_comprehensive_emergency_scenario() {
     assert_eq!(profile.active_conditions.len(), 2);
     assert_eq!(notified.len(), 2);
 
-    let alerts = client.get_critical_alerts(&patient);
+    let alerts = client.get_critical_alerts(&patient, &patient);
     assert_eq!(alerts.len(), 1);
 
-    let logs = client.get_emergency_access_logs(&patient);
+    let logs = client.get_emergency_access_logs(&patient, &patient);
     assert_eq!(logs.len(), 1);
 }

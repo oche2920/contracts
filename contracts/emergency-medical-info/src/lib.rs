@@ -2,7 +2,7 @@
 #![allow(clippy::too_many_arguments)]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, Address, BytesN, Env, String, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, String, Symbol, Vec,
 };
 
 /// --------------------
@@ -69,6 +69,14 @@ pub enum DataKey {
     EmergencyAccessLog(Address),
     DNROrder(Address),
     EmergencyNotifications(Address),
+}
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum Error {
+    EmergencyProfileNotFound = 1,
+    NotAuthorized = 2,
 }
 
 #[contract]
@@ -159,7 +167,7 @@ impl EmergencyMedicalInfo {
         emergency_type: Symbol,
         justification: String,
         location: String,
-    ) -> EmergencyProfile {
+    ) -> Result<EmergencyProfile, Error> {
         provider_id.require_auth();
 
         // Log the emergency access (break-glass audit)
@@ -186,7 +194,7 @@ impl EmergencyMedicalInfo {
         env.storage()
             .persistent()
             .get(&profile_key)
-            .unwrap_or_else(|| panic!("Emergency profile not found"))
+            .ok_or(Error::EmergencyProfileNotFound)
     }
 
     /// Notify emergency contacts
@@ -195,14 +203,15 @@ impl EmergencyMedicalInfo {
         patient_id: Address,
         emergency_type: Symbol,
         notification_time: u64,
-    ) -> Vec<EmergencyContact> {
+    ) -> Result<Vec<EmergencyContact>, Error> {
+        patient_id.require_auth();
         // Get emergency profile
         let profile_key = DataKey::EmergencyProfile(patient_id.clone());
         let profile: EmergencyProfile = env
             .storage()
             .persistent()
             .get(&profile_key)
-            .unwrap_or_else(|| panic!("Emergency profile not found"));
+            .ok_or(Error::EmergencyProfileNotFound)?;
 
         // Log notification
         let notif_key = DataKey::EmergencyNotifications(patient_id.clone());
@@ -215,7 +224,7 @@ impl EmergencyMedicalInfo {
         notifications.push_back((emergency_type, notification_time));
         env.storage().persistent().set(&notif_key, &notifications);
 
-        profile.emergency_contacts
+        Ok(profile.emergency_contacts)
     }
 
     /// Record DNR (Do Not Resuscitate) order
@@ -255,44 +264,92 @@ impl EmergencyMedicalInfo {
         env: Env,
         patient_id: Address,
         requester: Address,
-    ) -> EmergencyProfile {
+    ) -> Result<EmergencyProfile, Error> {
         requester.require_auth();
+        if requester != patient_id && !Self::has_emergency_access_log(&env, &patient_id, &requester)
+        {
+            return Err(Error::NotAuthorized);
+        }
 
         let key = DataKey::EmergencyProfile(patient_id.clone());
         env.storage()
             .persistent()
             .get(&key)
-            .unwrap_or_else(|| panic!("Emergency profile not found"))
+            .ok_or(Error::EmergencyProfileNotFound)
     }
 
     /// Get critical alerts for a patient
-    pub fn get_critical_alerts(env: Env, patient_id: Address) -> Vec<CriticalAlert> {
+    pub fn get_critical_alerts(
+        env: Env,
+        patient_id: Address,
+        requester: Address,
+    ) -> Result<Vec<CriticalAlert>, Error> {
+        Self::require_emergency_read_access(&env, &patient_id, &requester)?;
         let key = DataKey::CriticalAlerts(patient_id);
-        env.storage()
+        Ok(env
+            .storage()
             .persistent()
             .get(&key)
-            .unwrap_or(Vec::new(&env))
+            .unwrap_or(Vec::new(&env)))
     }
 
     /// Get emergency access logs (audit trail)
-    pub fn get_emergency_access_logs(env: Env, patient_id: Address) -> Vec<EmergencyAccessLog> {
+    pub fn get_emergency_access_logs(
+        env: Env,
+        patient_id: Address,
+        requester: Address,
+    ) -> Result<Vec<EmergencyAccessLog>, Error> {
+        Self::require_emergency_read_access(&env, &patient_id, &requester)?;
         let key = DataKey::EmergencyAccessLog(patient_id);
-        env.storage()
+        Ok(env
+            .storage()
             .persistent()
             .get(&key)
-            .unwrap_or(Vec::new(&env))
+            .unwrap_or(Vec::new(&env)))
     }
 
     /// Get DNR order details
-    pub fn get_dnr_order(env: Env, patient_id: Address) -> Option<DNROrder> {
+    pub fn get_dnr_order(
+        env: Env,
+        patient_id: Address,
+        requester: Address,
+    ) -> Result<Option<DNROrder>, Error> {
+        Self::require_emergency_read_access(&env, &patient_id, &requester)?;
         let key = DataKey::DNROrder(patient_id);
-        env.storage().persistent().get(&key)
+        Ok(env.storage().persistent().get(&key))
     }
 
     /// Check if patient has emergency profile
     pub fn has_emergency_profile(env: Env, patient_id: Address) -> bool {
         let key = DataKey::EmergencyProfile(patient_id);
         env.storage().persistent().has(&key)
+    }
+
+    fn require_emergency_read_access(
+        env: &Env,
+        patient_id: &Address,
+        requester: &Address,
+    ) -> Result<(), Error> {
+        requester.require_auth();
+        if requester == patient_id || Self::has_emergency_access_log(env, patient_id, requester) {
+            return Ok(());
+        }
+        Err(Error::NotAuthorized)
+    }
+
+    fn has_emergency_access_log(env: &Env, patient_id: &Address, requester: &Address) -> bool {
+        let key = DataKey::EmergencyAccessLog(patient_id.clone());
+        let logs: Vec<EmergencyAccessLog> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(Vec::new(env));
+        for log in logs.iter() {
+            if log.provider_id == *requester {
+                return true;
+            }
+        }
+        false
     }
 }
 
