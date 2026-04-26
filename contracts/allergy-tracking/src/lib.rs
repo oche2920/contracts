@@ -162,11 +162,13 @@ impl AllergyTrackingContract {
             .unwrap_or(Vec::new(&env));
 
         for allergy_id in patient_allergies.iter() {
-            let allergy: AllergyRecord = env
+            let Some(allergy) = env
                 .storage()
                 .persistent()
-                .get(&DataKey::Allergy(allergy_id))
-                .unwrap();
+                .get::<DataKey, AllergyRecord>(&DataKey::Allergy(allergy_id))
+            else {
+                continue;
+            };
             if !allergy.is_deleted
                 && allergy.allergen == allergen
                 && allergy.status != AllergyStatus::Resolved
@@ -361,11 +363,13 @@ impl AllergyTrackingContract {
         let mut warnings = Vec::new(&env);
 
         for allergy_id in patient_allergies.iter() {
-            let allergy: AllergyRecord = env
+            let Some(allergy) = env
                 .storage()
                 .persistent()
-                .get(&DataKey::Allergy(allergy_id))
-                .unwrap();
+                .get::<DataKey, AllergyRecord>(&DataKey::Allergy(allergy_id))
+            else {
+                continue;
+            };
 
             // Only check active allergies
             if allergy.is_deleted || allergy.status != AllergyStatus::Active {
@@ -420,11 +424,13 @@ impl AllergyTrackingContract {
         let mut active_allergies = Vec::new(&env);
 
         for allergy_id in patient_allergies.iter() {
-            let allergy: AllergyRecord = env
+            let Some(allergy) = env
                 .storage()
                 .persistent()
-                .get(&DataKey::Allergy(allergy_id))
-                .unwrap();
+                .get::<DataKey, AllergyRecord>(&DataKey::Allergy(allergy_id))
+            else {
+                continue;
+            };
 
             if !allergy.is_deleted && allergy.status == AllergyStatus::Active {
                 active_allergies.push_back(allergy);

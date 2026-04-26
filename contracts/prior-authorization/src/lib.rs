@@ -76,16 +76,16 @@ impl PriorAuthorizationContract {
         let auth_request_id = next_auth_id(&env);
 
         // Calculate SLA deadline based on urgency
-        let sla_config = load_sla_config(&env, &urgency)
-            .unwrap_or(SLAConfig {
-                urgency: urgency.clone(),
-                standard_deadline_hours: 72, // 3 days default
-                expedited_deadline_hours: 24, // 1 day default
-                auto_approval_threshold: 30, // 30 days default
-                requires_medical_director: false,
-            });
+        let sla_config = load_sla_config(&env, &urgency).unwrap_or(SLAConfig {
+            urgency: urgency.clone(),
+            standard_deadline_hours: 72,  // 3 days default
+            expedited_deadline_hours: 24, // 1 day default
+            auto_approval_threshold: 30,  // 30 days default
+            requires_medical_director: false,
+        });
 
-        let is_expedited = urgency == Symbol::new(&env, "urgent") || urgency == Symbol::new(&env, "emergency");
+        let is_expedited =
+            urgency == Symbol::new(&env, "urgent") || urgency == Symbol::new(&env, "emergency");
         let deadline_hours = if is_expedited {
             sla_config.expedited_deadline_hours
         } else {
@@ -142,8 +142,7 @@ impl PriorAuthorizationContract {
     ) -> Result<(), Error> {
         provider_id.require_auth();
 
-        let req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         if req.provider_id != provider_id {
             return Err(Error::Unauthorized);
@@ -182,12 +181,10 @@ impl PriorAuthorizationContract {
     ) -> Result<(), Error> {
         reviewer_id.require_auth();
 
-        let mut req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let mut req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         // Validate reviewer authorization
-        let reviewer = load_reviewer(&env, &reviewer_id)
-            .ok_or(Error::ReviewerNotFound)?;
+        let reviewer = load_reviewer(&env, &reviewer_id).ok_or(Error::ReviewerNotFound)?;
 
         if !reviewer.is_active {
             return Err(Error::ReviewerNotAuthorized);
@@ -246,13 +243,13 @@ impl PriorAuthorizationContract {
             req.valid_from = valid_from.or(Some(env.ledger().timestamp()));
             req.valid_until = valid_until.or(Some(env.ledger().timestamp() + (30 * 24 * 60 * 60))); // 30 days default
             req.decision_date = Some(env.ledger().timestamp());
-            
+
             // Remove from overdue tracking if present
             remove_overdue_auth(&env, auth_request_id);
         } else if decision == denied_sym {
             req.status = AuthStatus::Denied;
             req.decision_date = Some(env.ledger().timestamp());
-            
+
             // Remove from overdue tracking if present
             remove_overdue_auth(&env, auth_request_id);
         } else if decision == more_info_sym {
@@ -273,12 +270,12 @@ impl PriorAuthorizationContract {
         let prior_review_hash = if history.is_empty() {
             None
         } else {
-            let last_review = history.get(history.len() - 1).unwrap();
+            let last_review = history
+                .get(history.len() - 1)
+                .ok_or(Error::ReviewNotFound)?;
             Some(last_review.review_entry_hash.clone())
         };
-        let review_notes_hash = env
-            .crypto()
-            .sha256(&review_notes.clone().to_xdr(&env));
+        let review_notes_hash = env.crypto().sha256(&review_notes.clone().to_xdr(&env));
         let review_id = next_review_id(&env);
         let mut review_record = ReviewRecord {
             review_id,
@@ -318,8 +315,7 @@ impl PriorAuthorizationContract {
     ) -> Result<(), Error> {
         provider_id.require_auth();
 
-        let mut req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let mut req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         if req.provider_id != provider_id {
             return Err(Error::Unauthorized);
@@ -341,7 +337,10 @@ impl PriorAuthorizationContract {
         save_peer_to_peer(&env, &p2p);
 
         // Transition to UnderReview if still in Submitted state
-        if matches!(req.status, AuthStatus::Submitted | AuthStatus::MoreInfoNeeded) {
+        if matches!(
+            req.status,
+            AuthStatus::Submitted | AuthStatus::MoreInfoNeeded
+        ) {
             req.status = AuthStatus::UnderReview;
             save_auth_request(&env, &req);
         }
@@ -364,11 +363,9 @@ impl PriorAuthorizationContract {
     ) -> Result<(), Error> {
         insurance_admin.require_auth();
 
-        load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
-        let mut p2p = load_peer_to_peer(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let mut p2p = load_peer_to_peer(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         p2p.scheduled_time = Some(scheduled_time);
         p2p.medical_director = Some(medical_director.clone());
@@ -376,8 +373,7 @@ impl PriorAuthorizationContract {
         save_peer_to_peer(&env, &p2p);
 
         // Update auth status
-        let mut req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let mut req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
         req.status = AuthStatus::PeerToPeerScheduled;
         save_auth_request(&env, &req);
 
@@ -400,8 +396,7 @@ impl PriorAuthorizationContract {
     ) -> Result<u64, Error> {
         provider_id.require_auth();
 
-        let mut req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let mut req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         if req.provider_id != provider_id {
             return Err(Error::Unauthorized);
@@ -420,7 +415,8 @@ impl PriorAuthorizationContract {
         // Verify level increases monotonically
         let existing = load_appeals_for_auth(&env, auth_request_id);
         if !existing.is_empty() {
-            let last = existing.get(existing.len() - 1)
+            let last = existing
+                .get(existing.len() - 1)
                 .ok_or(Error::AppealNotFound)?;
             if appeal_level <= last.appeal_level {
                 return Err(Error::MaxAppealLevelReached);
@@ -432,12 +428,23 @@ impl PriorAuthorizationContract {
         let previous_appeal_id = if existing.is_empty() {
             None
         } else {
-            Some(existing.get(existing.len() - 1).unwrap().appeal_id)
+            Some(
+                existing
+                    .get(existing.len() - 1)
+                    .ok_or(Error::AppealNotFound)?
+                    .appeal_id,
+            )
         };
         let previous_appeal_hash = if existing.is_empty() {
             None
         } else {
-            Some(existing.get(existing.len() - 1).unwrap().appeal_chain_hash.clone())
+            Some(
+                existing
+                    .get(existing.len() - 1)
+                    .ok_or(Error::AppealNotFound)?
+                    .appeal_chain_hash
+                    .clone(),
+            )
         };
 
         let review_history = load_review_history(&env, auth_request_id);
@@ -446,7 +453,7 @@ impl PriorAuthorizationContract {
         } else {
             review_history
                 .get(review_history.len() - 1)
-                .unwrap()
+                .ok_or(Error::ReviewNotFound)?
                 .review_entry_hash
                 .clone()
         };
@@ -499,8 +506,7 @@ impl PriorAuthorizationContract {
     ) -> Result<(), Error> {
         provider_id.require_auth();
 
-        let mut req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let mut req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         if req.provider_id != provider_id {
             return Err(Error::Unauthorized);
@@ -517,7 +523,11 @@ impl PriorAuthorizationContract {
 
         env.events().publish(
             (Symbol::new(&env, "auth_expedited"),),
-            (auth_request_id, expected_service_date, urgency_justification),
+            (
+                auth_request_id,
+                expected_service_date,
+                urgency_justification,
+            ),
         );
 
         Ok(())
@@ -533,8 +543,7 @@ impl PriorAuthorizationContract {
     ) -> Result<(), Error> {
         provider_id.require_auth();
 
-        let req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         if req.provider_id != provider_id {
             return Err(Error::Unauthorized);
@@ -572,8 +581,7 @@ impl PriorAuthorizationContract {
     ) -> Result<(), Error> {
         provider_id.require_auth();
 
-        let mut req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let mut req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         if req.provider_id != provider_id {
             return Err(Error::Unauthorized);
@@ -628,8 +636,7 @@ impl PriorAuthorizationContract {
     ) -> Result<AuthorizationInfo, Error> {
         requester.require_auth();
 
-        let req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         Ok(AuthorizationInfo {
             auth_request_id: req.auth_request_id,

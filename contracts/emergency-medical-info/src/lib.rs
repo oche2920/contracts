@@ -204,7 +204,6 @@ impl EmergencyMedicalInfo {
         emergency_type: Symbol,
         notification_time: u64,
     ) -> Result<Vec<EmergencyContact>, Error> {
-        patient_id.require_auth();
         // Get emergency profile
         let profile_key = DataKey::EmergencyProfile(patient_id.clone());
         let profile: EmergencyProfile = env

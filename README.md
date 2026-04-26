@@ -101,6 +101,12 @@ git clone https://github.com/KingFRANKHOOD/contracts.git
 cd contracts
 ```
 
+Or via SSH:
+```bash
+git clone git@github.com:KingFRANKHOOD/contracts.git
+cd contracts
+```
+
 2. Install dependencies:
 ```bash
 cargo build

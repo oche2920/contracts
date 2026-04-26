@@ -111,16 +111,21 @@ impl InsurerRegistry {
         };
 
         env.storage().persistent().set(&key, &insurer);
-        env.storage()
-            .persistent()
-            .set(&DataKey::ClaimsReviewers(wallet.clone()), &Vec::<Address>::new(&env));
+        env.storage().persistent().set(
+            &DataKey::ClaimsReviewers(wallet.clone()),
+            &Vec::<Address>::new(&env),
+        );
 
         env.events()
             .publish((symbol_short!("reg_ins"), wallet), symbol_short!("success"));
         Ok(())
     }
 
-    pub fn update_insurer(env: Env, wallet: Address, metadata: String) -> Result<(), ContractError> {
+    pub fn update_insurer(
+        env: Env,
+        wallet: Address,
+        metadata: String,
+    ) -> Result<(), ContractError> {
         wallet.require_auth();
 
         let mut insurer = Self::assert_active_insurer(&env, &wallet)?;
@@ -195,8 +200,8 @@ impl InsurerRegistry {
             .get(&reviewers_key)
             .unwrap_or(Vec::new(&env));
 
-        for i in 0..reviewers.len() {
-            if reviewers.get(i).unwrap() == reviewer_wallet {
+        for reviewer in reviewers.iter() {
+            if reviewer == reviewer_wallet {
                 return Err(ContractError::ReviewerAlreadyAuthorized);
             }
         }
@@ -229,8 +234,7 @@ impl InsurerRegistry {
         let mut new_reviewers: Vec<Address> = Vec::new(&env);
         let mut found = false;
 
-        for i in 0..reviewers.len() {
-            let reviewer = reviewers.get(i).unwrap();
+        for reviewer in reviewers.iter() {
             if reviewer != reviewer_wallet {
                 new_reviewers.push_back(reviewer);
             } else {
@@ -275,8 +279,8 @@ impl InsurerRegistry {
             .get(&DataKey::ClaimsReviewers(insurer_wallet))
             .unwrap_or(Vec::new(&env));
 
-        for i in 0..reviewers.len() {
-            if reviewers.get(i).unwrap() == reviewer_wallet {
+        for reviewer in reviewers.iter() {
+            if reviewer == reviewer_wallet {
                 return true;
             }
         }

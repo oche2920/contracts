@@ -342,7 +342,9 @@ impl PatientVitalsContract {
         let mut readings = Vec::new(&env);
         let end = (start + PAGE_SIZE).min(all.len());
         for i in start..end {
-            readings.push_back(all.get(i).unwrap());
+            if let Some(reading) = all.get(i) {
+                readings.push_back(reading);
+            }
         }
         let next_page = if end < all.len() { Some(page + 1) } else { None };
         Ok(PagedRawResult { readings, next_page })
