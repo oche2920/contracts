@@ -11,6 +11,8 @@ pub enum Error {
     AlreadyInitialized = 5,
     NotInitialized = 6,
     InsurerNotRegistered = 7,
+    InvalidAmount = 8,
+    AmountOverflow = 9,
 }
 
 #[contracttype]
