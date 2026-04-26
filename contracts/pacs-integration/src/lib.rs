@@ -9,10 +9,36 @@ mod types;
 mod test;
 
 use soroban_sdk::{
-    contract, contractimpl, symbol_short, Address, BytesN, Env, String, Symbol, Vec,
+    contract, contractimpl, symbol_short, Address, Bytes, BytesN, Env, String, Symbol, Vec,
 };
+use soroban_sdk::xdr::ToXdr;
 use storage::*;
 use types::*;
+
+const MAX_VIEW_TIMESTAMP_DRIFT_SECS: u64 = 300;
+
+fn compute_view_log_entry_hash(
+    env: &Env,
+    study_id: u64,
+    viewer_id: &Address,
+    purpose: &String,
+    view_timestamp: u64,
+    view_duration: u32,
+    recorded_at: u64,
+    previous_entry_hash: &Option<BytesN<32>>,
+) -> BytesN<32> {
+    let mut data = Bytes::new(env);
+    data.extend_from_array(&study_id.to_be_bytes());
+    data.append(&viewer_id.clone().to_xdr(env));
+    data.append(&purpose.clone().to_xdr(env));
+    data.extend_from_array(&view_timestamp.to_be_bytes());
+    data.extend_from_array(&view_duration.to_be_bytes());
+    data.extend_from_array(&recorded_at.to_be_bytes());
+    if let Some(prev) = previous_entry_hash {
+        data.append(&prev.clone().to_xdr(env));
+    }
+    env.crypto().sha256(&data).into()
+}
 
 #[contract]
 pub struct PacsContract;
@@ -422,6 +448,7 @@ impl PacsContract {
         viewer_id.require_auth();
 
         let study = load_study(&env, study_id).ok_or(Error::NotFound)?;
+        let now = env.ledger().timestamp();
 
         let is_owner = study.patient_id == viewer_id || study.ordering_provider == viewer_id;
 
@@ -429,20 +456,55 @@ impl PacsContract {
             Self::assert_active_grant(&env, study_id, &viewer_id, &purpose)?;
         }
 
-        let record = ViewRecord {
-            viewer_id: viewer_id.clone(),
+        let earliest_allowed = now.saturating_sub(MAX_VIEW_TIMESTAMP_DRIFT_SECS);
+        let latest_allowed = now.saturating_add(MAX_VIEW_TIMESTAMP_DRIFT_SECS);
+        if view_timestamp < earliest_allowed || view_timestamp > latest_allowed {
+            return Err(Error::TimestampOutOfBounds);
+        }
+
+        if let Some(previous_ts) = load_viewer_last_view_timestamp(&env, study_id, &viewer_id) {
+            if view_timestamp <= previous_ts {
+                return Err(Error::NonMonotonicViewTimestamp);
+            }
+        }
+
+        let previous_entry_hash = load_viewer_view_chain_head(&env, study_id, &viewer_id);
+        let entry_hash = compute_view_log_entry_hash(
+            &env,
+            study_id,
+            &viewer_id,
+            &purpose,
             view_timestamp,
             view_duration,
+            now,
+            &previous_entry_hash,
+        );
+
+        let record = ViewRecord {
+            viewer_id: viewer_id.clone(),
+            purpose: purpose.clone(),
+            view_timestamp,
+            view_duration,
+            recorded_at: now,
+            previous_entry_hash,
+            entry_hash: entry_hash.clone(),
         };
 
         append_view_log(&env, study_id, &record);
+        save_viewer_last_view_timestamp(&env, study_id, &viewer_id, view_timestamp);
+        save_viewer_view_chain_head(&env, study_id, &viewer_id, &entry_hash);
 
         env.events().publish(
             (symbol_short!("view_log"), study_id),
-            (viewer_id, view_timestamp),
+            (viewer_id, view_timestamp, entry_hash),
         );
 
         Ok(())
+    }
+
+    /// Return all view records for a study.
+    pub fn get_study_view_logs(env: Env, study_id: u64) -> Vec<ViewRecord> {
+        load_view_logs(&env, study_id)
     }
 
     /// Return studies for a patient that pass the filters and that the requester

@@ -6,8 +6,6 @@ use soroban_sdk::{
     Address, BytesN, Env, Vec,
 };
 
-// ── helpers ───────────────────────────────────────────────────────────────────
-
 fn make_signers(env: &Env, n: u32) -> Vec<Address> {
     let mut v = Vec::new(env);
     for _ in 0..n {
@@ -20,116 +18,134 @@ fn dummy_hash(env: &Env) -> BytesN<32> {
     BytesN::from_array(env, &[1u8; 32])
 }
 
-/// Returns (env, signers, client) with `n` signers and given threshold.
 fn setup(n: u32, threshold: u32) -> (Env, Vec<Address>, UpgradeGovernanceClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register_contract(None, UpgradeGovernance);
     let client = UpgradeGovernanceClient::new(&env, &contract_id);
     let signers = make_signers(&env, n);
-    client.initialize(&signers, &threshold);
+    client.initialize(&signers, &threshold).unwrap();
     (env, signers, client)
 }
 
 // ── initialize ────────────────────────────────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "Already initialized")]
-fn test_double_initialize() {
+fn test_double_initialize_returns_error() {
     let (env, signers, client) = setup(3, 2);
-    client.initialize(&signers, &2u32);
+    let err = client.try_initialize(&signers, &2u32).unwrap_err().unwrap();
+    assert_eq!(err, Error::AlreadyInitialized);
 }
 
 #[test]
-#[should_panic(expected = "Invalid threshold")]
-fn test_threshold_exceeds_signers() {
+fn test_invalid_threshold_returns_error() {
     let env = Env::default();
     env.mock_all_auths();
     let contract_id = env.register_contract(None, UpgradeGovernance);
     let client = UpgradeGovernanceClient::new(&env, &contract_id);
     let signers = make_signers(&env, 2);
-    client.initialize(&signers, &3u32);
+    let err = client.try_initialize(&signers, &3u32).unwrap_err().unwrap();
+    assert_eq!(err, Error::InvalidThreshold);
+}
+
+#[test]
+fn test_propose_before_init_returns_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, UpgradeGovernance);
+    let client = UpgradeGovernanceClient::new(&env, &contract_id);
+    let signer = Address::generate(&env);
+    let err = client
+        .try_propose_upgrade(&signer, &dummy_hash(&env))
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, Error::NotInitialized);
 }
 
 // ── propose ───────────────────────────────────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "Unauthorized: not an admin signer")]
-fn test_non_signer_cannot_propose() {
+fn test_non_signer_propose_returns_error() {
     let (env, _signers, client) = setup(3, 2);
     let stranger = Address::generate(&env);
-    client.propose_upgrade(&stranger, &dummy_hash(&env));
+    let err = client
+        .try_propose_upgrade(&stranger, &dummy_hash(&env))
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, Error::NotASigner);
 }
 
 #[test]
 fn test_propose_returns_incrementing_ids() {
     let (env, signers, client) = setup(3, 2);
     let s0 = signers.get(0).unwrap();
-    let id0 = client.propose_upgrade(&s0, &dummy_hash(&env));
-    let id1 = client.propose_upgrade(&s0, &BytesN::from_array(&env, &[2u8; 32]));
+    let id0 = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
+    let id1 = client
+        .propose_upgrade(&s0, &BytesN::from_array(&env, &[2u8; 32]))
+        .unwrap();
     assert_eq!(id0, 0);
     assert_eq!(id1, 1);
 }
 
-// ── vote: non-signer ──────────────────────────────────────────────────────────
+// ── vote ──────────────────────────────────────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "Unauthorized: not an admin signer")]
-fn test_non_signer_cannot_vote() {
+fn test_non_signer_vote_returns_error() {
     let (env, signers, client) = setup(3, 2);
     let s0 = signers.get(0).unwrap();
     let stranger = Address::generate(&env);
-    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
-    client.vote_upgrade(&stranger, &id);
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
+    let err = client.try_vote_upgrade(&stranger, &id).unwrap_err().unwrap();
+    assert_eq!(err, Error::NotASigner);
 }
 
-// ── vote: duplicate ───────────────────────────────────────────────────────────
-
 #[test]
-#[should_panic(expected = "Already voted")]
-fn test_duplicate_vote_rejected() {
+fn test_duplicate_vote_returns_error() {
     let (env, signers, client) = setup(3, 3);
     let s0 = signers.get(0).unwrap();
     let s1 = signers.get(1).unwrap();
-    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
-    client.vote_upgrade(&s1, &id);
-    client.vote_upgrade(&s1, &id); // second vote from s1
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
+    client.vote_upgrade(&s1, &id).unwrap();
+    let err = client.try_vote_upgrade(&s1, &id).unwrap_err().unwrap();
+    assert_eq!(err, Error::AlreadyVoted);
+}
+
+#[test]
+fn test_vote_after_expiry_returns_error() {
+    let (env, signers, client) = setup(3, 3);
+    let s0 = signers.get(0).unwrap();
+    let s1 = signers.get(1).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
+    env.ledger().with_mut(|li| { li.timestamp += VOTING_WINDOW + 1; });
+    let err = client.try_vote_upgrade(&s1, &id).unwrap_err().unwrap();
+    assert_eq!(err, Error::Expired);
 }
 
 // ── execute: vote fail (under threshold) ─────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "Threshold not met")]
-fn test_execute_fails_under_threshold() {
-    // threshold = 3, only proposer has voted (1 vote)
+fn test_execute_under_threshold_returns_error() {
     let (env, signers, client) = setup(3, 3);
     let s0 = signers.get(0).unwrap();
-    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
-    client.execute_upgrade(&s0, &id);
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
+    let err = client.try_execute_upgrade(&s0, &id).unwrap_err().unwrap();
+    assert_eq!(err, Error::ThresholdNotMet);
 }
 
 // ── execute: vote pass (at threshold) ────────────────────────────────────────
 
-// NOTE: update_current_contract_wasm requires a valid uploaded WASM hash on a
-// real network. In the test environment we verify all pre-conditions pass and
-// the call reaches the deployer step by expecting the SDK's "missing wasm"
-// panic rather than any of our own guards.
 #[test]
 fn test_execute_passes_threshold_check() {
     let (env, signers, client) = setup(3, 2);
     let s0 = signers.get(0).unwrap();
     let s1 = signers.get(1).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
+    client.vote_upgrade(&s1, &id).unwrap();
 
-    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
-    client.vote_upgrade(&s1, &id);
-
-    // Proposal has 2 votes == threshold. Governance checks pass; the deployer
-    // call will panic because the dummy hash isn't a real uploaded WASM in the
-    // test environment. We catch that to confirm our logic was satisfied.
+    // Governance checks pass; deployer panics on dummy hash — that's expected.
     let result = std::panic::catch_unwind(|| {
-        client.execute_upgrade(&s0, &id);
+        client.execute_upgrade(&s0, &id).unwrap();
     });
-    // Our guards did NOT fire — only the deployer step failed.
     match result {
         Err(e) => {
             let msg = e
@@ -138,56 +154,42 @@ fn test_execute_passes_threshold_check() {
                 .or_else(|| e.downcast_ref::<&str>().copied())
                 .unwrap_or("");
             assert!(
-                !msg.contains("Threshold not met")
-                    && !msg.contains("Proposal expired")
-                    && !msg.contains("already executed"),
-                "unexpected governance panic: {msg}"
+                !msg.contains("ThresholdNotMet")
+                    && !msg.contains("Expired")
+                    && !msg.contains("AlreadyExecuted"),
+                "unexpected governance error: {msg}"
             );
         }
-        Ok(_) => {} // deployer succeeded (shouldn't happen with dummy hash, but fine)
+        Ok(_) => {}
     }
 }
 
-// ── execute: expired proposal ─────────────────────────────────────────────────
+// ── execute: expired ─────────────────────────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "Proposal expired")]
-fn test_execute_expired_proposal() {
+fn test_execute_expired_returns_error() {
     let (env, signers, client) = setup(3, 2);
     let s0 = signers.get(0).unwrap();
     let s1 = signers.get(1).unwrap();
-
-    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
-    client.vote_upgrade(&s1, &id);
-
-    // Advance past the 7-day voting window
-    env.ledger().with_mut(|li| {
-        li.timestamp += VOTING_WINDOW + 1;
-    });
-
-    client.execute_upgrade(&s0, &id);
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
+    client.vote_upgrade(&s1, &id).unwrap();
+    env.ledger().with_mut(|li| { li.timestamp += VOTING_WINDOW + 1; });
+    let err = client.try_execute_upgrade(&s0, &id).unwrap_err().unwrap();
+    assert_eq!(err, Error::Expired);
 }
 
 // ── execute: already executed ─────────────────────────────────────────────────
 
 #[test]
-#[should_panic(expected = "Proposal already executed")]
-fn test_vote_on_executed_proposal_rejected() {
-    // Mark a proposal as executed by directly checking the status guard via
-    // a second execute attempt after the first succeeds past our checks.
-    // We simulate by manually writing an Executed proposal into storage and
-    // then trying to vote on it.
+fn test_vote_on_executed_proposal_returns_error() {
     let (env, signers, client) = setup(3, 2);
     let s0 = signers.get(0).unwrap();
     let s1 = signers.get(1).unwrap();
     let s2 = signers.get(2).unwrap();
+    let id = client.propose_upgrade(&s0, &dummy_hash(&env)).unwrap();
+    client.vote_upgrade(&s1, &id).unwrap();
 
-    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
-    client.vote_upgrade(&s1, &id);
-
-    // Manually flip status to Executed so we can test the guard cleanly
-    // without needing a real WASM hash for the deployer call.
-    let mut proposal: UpgradeProposal = client.get_proposal(&id);
+    let mut proposal: UpgradeProposal = client.get_proposal(&id).unwrap();
     proposal.status = ProposalStatus::Executed;
     env.as_contract(&client.address, || {
         env.storage()
@@ -195,24 +197,6 @@ fn test_vote_on_executed_proposal_rejected() {
             .set(&DataKey::Proposal(id), &proposal);
     });
 
-    // Now any further interaction should be rejected
-    client.vote_upgrade(&s2, &id);
-}
-
-// ── vote after expiry ─────────────────────────────────────────────────────────
-
-#[test]
-#[should_panic(expected = "Proposal expired")]
-fn test_vote_after_expiry_rejected() {
-    let (env, signers, client) = setup(3, 3);
-    let s0 = signers.get(0).unwrap();
-    let s1 = signers.get(1).unwrap();
-
-    let id = client.propose_upgrade(&s0, &dummy_hash(&env));
-
-    env.ledger().with_mut(|li| {
-        li.timestamp += VOTING_WINDOW + 1;
-    });
-
-    client.vote_upgrade(&s1, &id);
+    let err = client.try_vote_upgrade(&s2, &id).unwrap_err().unwrap();
+    assert_eq!(err, Error::AlreadyExecuted);
 }

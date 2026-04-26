@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol, Vec};
+use soroban_sdk::{testutils::{Address as _, Ledger}, Address, BytesN, Env, String, Symbol, Vec};
 
 use crate::types::{ComparisonCriteria, Error, ImagingFilters};
 use crate::{PacsContract, PacsContractClient};
@@ -214,11 +214,12 @@ fn grant_access_and_track_view() {
         &String::from_str(&env, "clinical-review"),
         &None,
     );
+    env.ledger().set_timestamp(1_000);
     client.track_study_views(
         &sid,
         &viewer,
         &String::from_str(&env, "clinical-review"),
-        &1_700_001_000_u64,
+        &1_000_u64,
         &30_u32,
     );
 }
@@ -230,18 +231,20 @@ fn patient_and_provider_can_view_without_grant() {
     let (client, patient, provider) = setup(&env);
     let sid = register_ct_chest(&env, &client, &patient, &provider);
 
+    env.ledger().set_timestamp(1_100);
     client.track_study_views(
         &sid,
         &patient,
         &String::from_str(&env, ""),
-        &1_700_001_100_u64,
+        &1_100_u64,
         &10_u32,
     );
+    env.ledger().set_timestamp(1_200);
     client.track_study_views(
         &sid,
         &provider,
         &String::from_str(&env, ""),
-        &1_700_001_200_u64,
+        &1_200_u64,
         &5_u32,
     );
 }
@@ -466,11 +469,12 @@ fn revoked_grant_blocks_subsequent_reads() {
         &String::from_str(&env, "qa-review"),
     );
 
+    env.ledger().set_timestamp(1_500);
     let result = client.try_track_study_views(
         &sid,
         &viewer,
         &String::from_str(&env, "qa-review"),
-        &1_700_001_500_u64,
+        &1_500_u64,
         &15_u32,
     );
     assert!(matches!(result, Err(Ok(Error::GrantRevoked))));
@@ -493,12 +497,121 @@ fn wrong_purpose_cannot_use_grant() {
         &None,
     );
 
+    env.ledger().set_timestamp(1_600);
     let result = client.try_track_study_views(
         &sid,
         &viewer,
         &String::from_str(&env, "research"),
-        &1_700_001_600_u64,
+        &1_600_u64,
         &12_u32,
     );
     assert!(matches!(result, Err(Ok(Error::Unauthorized))));
+}
+
+#[test]
+fn view_timestamp_outside_drift_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, patient, provider) = setup(&env);
+    let sid = register_ct_chest(&env, &client, &patient, &provider);
+    let viewer = Address::generate(&env);
+
+    client.grant_imaging_access(
+        &sid,
+        &patient,
+        &viewer,
+        &Symbol::new(&env, "view_only"),
+        &String::from_str(&env, "audit"),
+        &None,
+    );
+
+    env.ledger().set_timestamp(10_000);
+    let result = client.try_track_study_views(
+        &sid,
+        &viewer,
+        &String::from_str(&env, "audit"),
+        &9_699_u64, // 301s behind ledger time
+        &20_u32,
+    );
+    assert!(matches!(result, Err(Ok(Error::TimestampOutOfBounds))));
+}
+
+#[test]
+fn view_timestamp_must_be_monotonic_per_viewer_study() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, patient, provider) = setup(&env);
+    let sid = register_ct_chest(&env, &client, &patient, &provider);
+    let viewer = Address::generate(&env);
+
+    client.grant_imaging_access(
+        &sid,
+        &patient,
+        &viewer,
+        &Symbol::new(&env, "view_only"),
+        &String::from_str(&env, "audit"),
+        &None,
+    );
+
+    env.ledger().set_timestamp(2_000);
+    client.track_study_views(
+        &sid,
+        &viewer,
+        &String::from_str(&env, "audit"),
+        &2_000_u64,
+        &10_u32,
+    );
+
+    env.ledger().set_timestamp(2_010);
+    let result = client.try_track_study_views(
+        &sid,
+        &viewer,
+        &String::from_str(&env, "audit"),
+        &2_000_u64,
+        &8_u32,
+    );
+    assert!(matches!(result, Err(Ok(Error::NonMonotonicViewTimestamp))));
+}
+
+#[test]
+fn view_records_include_hash_chain_links() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, patient, provider) = setup(&env);
+    let sid = register_ct_chest(&env, &client, &patient, &provider);
+    let viewer = Address::generate(&env);
+
+    client.grant_imaging_access(
+        &sid,
+        &patient,
+        &viewer,
+        &Symbol::new(&env, "view_only"),
+        &String::from_str(&env, "audit"),
+        &None,
+    );
+
+    env.ledger().set_timestamp(3_000);
+    client.track_study_views(
+        &sid,
+        &viewer,
+        &String::from_str(&env, "audit"),
+        &3_000_u64,
+        &7_u32,
+    );
+    env.ledger().set_timestamp(3_020);
+    client.track_study_views(
+        &sid,
+        &viewer,
+        &String::from_str(&env, "audit"),
+        &3_020_u64,
+        &9_u32,
+    );
+
+    let logs = client.get_study_view_logs(&sid);
+    assert_eq!(logs.len(), 2);
+
+    let first = logs.get(0).unwrap();
+    assert!(first.previous_entry_hash.is_none());
+    let second = logs.get(1).unwrap();
+    assert_eq!(second.previous_entry_hash, Some(first.entry_hash.clone()));
 }

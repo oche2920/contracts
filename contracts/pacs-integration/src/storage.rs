@@ -2,9 +2,7 @@ use crate::types::{
     AccessGrant, CdRecord, DataKey, ImagingReport, ImagingStudy, QcReview, SeriesInfo, ViewRecord,
 };
 use soroban_sdk::{Address, Env, String, Vec};
-
-const BUMP_AMOUNT: u32 = 518400; // ~60 days in ledgers (assuming 5s ledger)
-const BUMP_THRESHOLD: u32 = 259200; // ~30 days
+use ttl_config::critical::{LEDGER_BUMP_AMOUNT, LEDGER_THRESHOLD};
 
 pub fn next_study_id(env: &Env) -> u64 {
     let id: u64 = env
@@ -33,7 +31,7 @@ pub fn save_study(env: &Env, study: &ImagingStudy) {
     env.storage().persistent().set(&key, study);
     env.storage()
         .persistent()
-        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+        .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP_AMOUNT);
 }
 
 pub fn load_study(env: &Env, study_id: u64) -> Option<ImagingStudy> {
@@ -45,7 +43,7 @@ pub fn save_series(env: &Env, study_id: u64, series: &Vec<SeriesInfo>) {
     env.storage().persistent().set(&key, series);
     env.storage()
         .persistent()
-        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+        .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP_AMOUNT);
 }
 
 pub fn load_series(env: &Env, study_id: u64) -> Vec<SeriesInfo> {
@@ -60,7 +58,7 @@ pub fn save_report(env: &Env, report: &ImagingReport) {
     env.storage().persistent().set(&key, report);
     env.storage()
         .persistent()
-        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+        .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP_AMOUNT);
 }
 
 #[allow(dead_code)]
@@ -73,7 +71,7 @@ pub fn save_access_list(env: &Env, study_id: u64, grants: &Vec<AccessGrant>) {
     env.storage().persistent().set(&key, grants);
     env.storage()
         .persistent()
-        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+        .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP_AMOUNT);
 }
 
 pub fn load_access_list(env: &Env, study_id: u64) -> Vec<AccessGrant> {
@@ -88,7 +86,7 @@ pub fn save_patient_studies(env: &Env, patient_id: &Address, studies: &Vec<u64>)
     env.storage().persistent().set(&key, studies);
     env.storage()
         .persistent()
-        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+        .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP_AMOUNT);
 }
 
 pub fn load_patient_studies(env: &Env, patient_id: &Address) -> Vec<u64> {
@@ -109,7 +107,52 @@ pub fn append_view_log(env: &Env, study_id: u64, record: &ViewRecord) {
     env.storage().persistent().set(&key, &logs);
     env.storage()
         .persistent()
+        .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP_AMOUNT);
+}
+
+pub fn load_view_logs(env: &Env, study_id: u64) -> Vec<ViewRecord> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::ViewLog(study_id))
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+pub fn save_viewer_last_view_timestamp(
+    env: &Env,
+    study_id: u64,
+    viewer_id: &Address,
+    view_timestamp: u64,
+) {
+    let key = DataKey::ViewerLastViewTs(study_id, viewer_id.clone());
+    env.storage().persistent().set(&key, &view_timestamp);
+    env.storage()
+        .persistent()
         .extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+}
+
+pub fn load_viewer_last_view_timestamp(env: &Env, study_id: u64, viewer_id: &Address) -> Option<u64> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::ViewerLastViewTs(study_id, viewer_id.clone()))
+}
+
+pub fn save_viewer_view_chain_head(
+    env: &Env,
+    study_id: u64,
+    viewer_id: &Address,
+    entry_hash: &BytesN<32>,
+) {
+    let key = DataKey::ViewerViewChainHead(study_id, viewer_id.clone());
+    env.storage().persistent().set(&key, entry_hash);
+    env.storage()
+        .persistent()
+        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+}
+
+pub fn load_viewer_view_chain_head(env: &Env, study_id: u64, viewer_id: &Address) -> Option<BytesN<32>> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::ViewerViewChainHead(study_id, viewer_id.clone()))
 }
 
 pub fn save_qc_review(env: &Env, review: &QcReview) {
@@ -117,7 +160,7 @@ pub fn save_qc_review(env: &Env, review: &QcReview) {
     env.storage().persistent().set(&key, review);
     env.storage()
         .persistent()
-        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+        .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP_AMOUNT);
 }
 
 pub fn save_anonymized_uid(env: &Env, study_id: u64, uid: &String) {
@@ -125,7 +168,7 @@ pub fn save_anonymized_uid(env: &Env, study_id: u64, uid: &String) {
     env.storage().persistent().set(&key, uid);
     env.storage()
         .persistent()
-        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+        .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP_AMOUNT);
 }
 
 pub fn save_cd_record(env: &Env, record: &CdRecord) {
@@ -133,5 +176,5 @@ pub fn save_cd_record(env: &Env, record: &CdRecord) {
     env.storage().persistent().set(&key, record);
     env.storage()
         .persistent()
-        .extend_ttl(&key, BUMP_THRESHOLD, BUMP_AMOUNT);
+        .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP_AMOUNT);
 }

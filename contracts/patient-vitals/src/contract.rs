@@ -1,8 +1,9 @@
 use crate::types::{
     AlertThresholds, DataKey, DeviceReading, DeviceRegistration, Error, MonitoringParameters,
-    Range, VitalAlert, VitalReading, VitalSigns, VitalStatistics,
+    PagedAggResult, PagedRawResult, Range, VitalAlert, VitalReading, VitalSigns, VitalStatistics,
+    VitalsAggregate, AGG_WINDOW_SECONDS, PAGE_SIZE, RAW_WINDOW_SECONDS,
 };
-use soroban_sdk::{contract, contractimpl, Address, Env, String, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol, Vec};
 
 // Error codes
 // 1 = Unauthorized
@@ -17,29 +18,51 @@ impl PatientVitalsContract {
     pub fn record_vital_signs(
         env: Env,
         patient_id: Address,
-        recorder: Address, // patient, provider, or device
+        recorder: Address,
         measurement_time: u64,
         vitals: VitalSigns,
     ) -> Result<u64, Error> {
         recorder.require_auth();
 
-        // Load existing history or create new
+        let reading = VitalReading {
+            measurement_time,
+            vitals: vitals.clone(),
+            recorder,
+        };
+
+        // --- raw windowed storage ---
+        let raw_idx = measurement_time / RAW_WINDOW_SECONDS;
+        let raw_key = DataKey::RawWindow(patient_id.clone(), raw_idx);
+        let mut raw_bucket: Vec<VitalReading> = env
+            .storage()
+            .persistent()
+            .get(&raw_key)
+            .unwrap_or(Vec::new(&env));
+        raw_bucket.push_back(reading.clone());
+        env.storage().persistent().set(&raw_key, &raw_bucket);
+        env.storage()
+            .persistent()
+            .set(&DataKey::LatestRawWindow(patient_id.clone()), &raw_idx);
+
+        // --- roll up into daily aggregate ---
+        let agg_idx = measurement_time / AGG_WINDOW_SECONDS;
+        Self::update_aggregate(&env, &patient_id, agg_idx, measurement_time, &vitals);
+
+        // --- legacy flat history (kept for backward compat) ---
         let key = DataKey::VitalsHistory(patient_id.clone());
         let mut history: Vec<VitalReading> = env
             .storage()
             .persistent()
             .get(&key)
             .unwrap_or(Vec::new(&env));
-
-        history.push_back(VitalReading {
-            measurement_time,
-            vitals,
-            recorder,
-        });
-
+        history.push_back(reading);
         env.storage().persistent().set(&key, &history);
 
-        // Returning the inserted index / record id
+        env.events().publish(
+            (symbol_short!("vital_rec"), patient_id),
+            (measurement_time, raw_idx, agg_idx),
+        );
+
         Ok(history.len() as u64)
     }
 
@@ -259,5 +282,100 @@ impl PatientVitalsContract {
         }
 
         None
+    }
+
+    // ── Retention / archival helpers ─────────────────────────────────────────
+
+    fn update_aggregate(env: &Env, patient_id: &Address, agg_idx: u64, ts: u64, v: &VitalSigns) {
+        let key = DataKey::AggWindow(patient_id.clone(), agg_idx);
+        let mut agg: VitalsAggregate = env.storage().persistent().get(&key).unwrap_or(
+            VitalsAggregate {
+                window_start: agg_idx * AGG_WINDOW_SECONDS,
+                window_end: (agg_idx + 1) * AGG_WINDOW_SECONDS - 1,
+                count: 0,
+                min_heart_rate: None,
+                max_heart_rate: None,
+                avg_heart_rate: None,
+                min_systolic: None,
+                max_systolic: None,
+                avg_systolic: None,
+                min_oxygen_sat: None,
+                max_oxygen_sat: None,
+                avg_oxygen_sat: None,
+            },
+        );
+        let _ = ts; // window bounds already encode time
+        agg.count += 1;
+        Self::merge_u32_stat(&mut agg.min_heart_rate, &mut agg.max_heart_rate, &mut agg.avg_heart_rate, v.heart_rate, agg.count);
+        Self::merge_u32_stat(&mut agg.min_systolic, &mut agg.max_systolic, &mut agg.avg_systolic, v.blood_pressure_systolic, agg.count);
+        Self::merge_u32_stat(&mut agg.min_oxygen_sat, &mut agg.max_oxygen_sat, &mut agg.avg_oxygen_sat, v.oxygen_saturation, agg.count);
+        env.storage().persistent().set(&key, &agg);
+    }
+
+    fn merge_u32_stat(min: &mut Option<u32>, max: &mut Option<u32>, avg: &mut Option<u32>, val: Option<u32>, count: u32) {
+        if let Some(v) = val {
+            *min = Some(min.map_or(v, |m| if v < m { v } else { m }));
+            *max = Some(max.map_or(v, |m| if v > m { v } else { m }));
+            let prev_avg = avg.unwrap_or(v);
+            *avg = Some((prev_avg * (count - 1) + v) / count);
+        }
+    }
+
+    /// Paged retrieval of raw readings from a specific hourly window.
+    /// `page` is 0-based; returns up to PAGE_SIZE readings.
+    pub fn get_raw_window_page(
+        env: Env,
+        patient_id: Address,
+        window_idx: u64,
+        page: u32,
+    ) -> Result<PagedRawResult, Error> {
+        let key = DataKey::RawWindow(patient_id, window_idx);
+        let all: Vec<VitalReading> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or(Vec::new(&env));
+        let start = (page * PAGE_SIZE) as u32;
+        if start > 0 && start >= all.len() {
+            return Err(Error::InvalidPage);
+        }
+        let mut readings = Vec::new(&env);
+        let end = (start + PAGE_SIZE).min(all.len());
+        for i in start..end {
+            readings.push_back(all.get(i).unwrap());
+        }
+        let next_page = if end < all.len() { Some(page + 1) } else { None };
+        Ok(PagedRawResult { readings, next_page })
+    }
+
+    /// Paged retrieval of daily aggregates.
+    /// `from_agg_idx` and `to_agg_idx` are inclusive day-window indices.
+    pub fn get_aggregate_page(
+        env: Env,
+        patient_id: Address,
+        from_agg_idx: u64,
+        to_agg_idx: u64,
+        page: u32,
+    ) -> Result<PagedAggResult, Error> {
+        let total_windows = if to_agg_idx >= from_agg_idx {
+            (to_agg_idx - from_agg_idx + 1) as u32
+        } else {
+            return Err(Error::InvalidParameter);
+        };
+        let start = page * PAGE_SIZE;
+        if start > 0 && start >= total_windows {
+            return Err(Error::InvalidPage);
+        }
+        let end = (start + PAGE_SIZE).min(total_windows);
+        let mut aggregates = Vec::new(&env);
+        for i in start..end {
+            let idx = from_agg_idx + i as u64;
+            let key = DataKey::AggWindow(patient_id.clone(), idx);
+            if let Some(agg) = env.storage().persistent().get::<_, VitalsAggregate>(&key) {
+                aggregates.push_back(agg);
+            }
+        }
+        let next_page = if end < total_windows { Some(page + 1) } else { None };
+        Ok(PagedAggResult { aggregates, next_page })
     }
 }

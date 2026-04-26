@@ -33,6 +33,7 @@ name = "allergy-management"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
+ "ttl-config",
 ]
 
 [[package]]
@@ -310,13 +311,6 @@ dependencies = [
 
 [[package]]
 name = "clinical-guideline"
-version = "0.1.0"
-dependencies = [
- "soroban-sdk",
-]
-
-[[package]]
-name = "clinical-trial"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
@@ -1204,6 +1198,7 @@ name = "pacs-integration"
 version = "0.0.0"
 dependencies = [
  "soroban-sdk",
+ "ttl-config",
 ]
 
 [[package]]
@@ -1218,6 +1213,7 @@ version = "0.0.0"
 dependencies = [
  "proptest",
  "soroban-sdk",
+ "ttl-config",
 ]
 
 [[package]]
@@ -2042,6 +2038,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ttl-config"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "typenum"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2435,7 +2438,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "zk-eligibility-verifier"
+name = "zk-eligibility"
 version = "0.0.0"
 dependencies = [
  "soroban-sdk",

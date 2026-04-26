@@ -1,4 +1,5 @@
 use soroban_sdk::{Address, Env, String, Symbol, Vec};
+use ttl_config::{extend_critical_ttl_if_exists, extend_critical_ttl};
 
 use crate::{AllergyRecord, DataKey, Error};
 
@@ -21,15 +22,23 @@ pub fn get_next_allergy_id(env: &Env) -> u64 {
 pub fn save_allergy(env: &Env, allergy: &AllergyRecord) {
     let key = DataKey::Allergy(allergy.allergy_id);
     env.storage().persistent().set(&key, allergy);
+    extend_critical_ttl(env, &key);
 }
 
 /// Get an allergy record by ID
 pub fn get_allergy(env: &Env, allergy_id: u64) -> Result<AllergyRecord, Error> {
     let key = DataKey::Allergy(allergy_id);
-    env.storage()
+    let result = env
+        .storage()
         .persistent()
         .get(&key)
-        .ok_or(Error::AllergyNotFound)
+        .ok_or(Error::AllergyNotFound);
+    
+    if result.is_ok() {
+        extend_critical_ttl_if_exists(env, &key);
+    }
+    
+    result
 }
 
 /// Add an allergy ID to a patient's allergy list
@@ -43,11 +52,13 @@ pub fn add_patient_allergy(env: &Env, patient_id: &Address, allergy_id: u64) {
 
     allergies.push_back(allergy_id);
     env.storage().persistent().set(&key, &allergies);
+    extend_critical_ttl(env, &key);
 }
 
 /// Get all allergy IDs for a patient
 pub fn get_patient_allergies(env: &Env, patient_id: &Address) -> Vec<u64> {
     let key = DataKey::PatientAllergies(patient_id.clone());
+    extend_critical_ttl_if_exists(env, &key);
     env.storage()
         .persistent()
         .get(&key)
@@ -81,6 +92,7 @@ pub fn check_duplicate_allergy(
 pub fn grant_access(env: &Env, patient_id: &Address, provider_id: &Address) {
     let key = DataKey::AccessControl(patient_id.clone(), provider_id.clone());
     env.storage().persistent().set(&key, &true);
+    extend_critical_ttl(env, &key);
 }
 
 /// Revoke access from a provider
@@ -118,7 +130,9 @@ pub fn add_cross_sensitivity(env: &Env, allergen1: &String, allergen2: &String) 
     let key2 = DataKey::CrossSensitivity(allergen2.clone(), allergen1.clone());
 
     env.storage().persistent().set(&key1, &true);
+    extend_critical_ttl(env, &key1);
     env.storage().persistent().set(&key2, &true);
+    extend_critical_ttl(env, &key2);
 }
 
 /// Check if two allergens have cross-sensitivity
