@@ -65,3 +65,6 @@ soroban contract deploy \
 
 - Keep this README aligned with API/auth/storage changes in `src/lib.rs`.
 - If this contract depends on external registries/contracts, document those dependencies before release.
+- Eligibility evaluation is deterministic: each rule is bound to an expected claim hash derived from
+  trial id, patient attestation hash, and rule fields. `check_patient_eligibility` now consumes
+  attestation/ZK evidence hashes and returns per-rule explainable pass/fail artifacts.

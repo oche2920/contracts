@@ -17,6 +17,7 @@ This README provides a quick operational map for integration, testing, and deplo
 - `initialize`
 
 ### Messages / Entry Points
+- `approve_artifact_metadata`
 - `execute_upgrade`
 - `get_proposal`
 - `propose_upgrade`
@@ -55,3 +56,5 @@ soroban contract deploy \
 
 - Keep this README aligned with API/auth/storage changes in `src/lib.rs`.
 - If this contract depends on external registries/contracts, document those dependencies before release.
+- Upgrade proposals now carry release metadata (`version`, `audit_digest`, `build_manifest`) and
+  the metadata hash must be pre-approved with `approve_artifact_metadata` before execution.
