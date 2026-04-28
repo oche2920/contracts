@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "contracts",
+  "contracts/shared",
   "contracts/health-records",
   "contracts/patient-registry",
   "contracts/hospital-registry",
@@ -43,6 +44,7 @@ exclude = ["contracts/patient-registry/benches"]
 
 [workspace.dependencies]
 soroban-sdk = "23"
+shared = { path = "contracts/shared" }
 
 [profile.release]
 opt-level = "z"

@@ -11,6 +11,7 @@ doctest = false
 [dependencies]
 shared-contracts = { path = "..", package = "Contracts" }
 soroban-sdk = { workspace = true }
+shared = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }

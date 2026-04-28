@@ -2,9 +2,10 @@
 #![allow(non_snake_case)]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String,
+    contract, contractevent, contracterror, contractimpl, contracttype, Address, Env, String,
     Symbol, Vec,
 };
+use shared::{events::EVENT_VERSION, temporal};
 
 // =============================================================================
 // Shared counter utilities
@@ -136,6 +137,31 @@ pub enum Error {
     AppointmentNotFound = 4,
     InvalidAppointmentStatus = 5,
     UnauthorizedAppointmentAction = 6,
+    /// datetime must be strictly in the future for new appointments
+    InvalidDatetime = 7,
+}
+
+/// Versioned event: a new appointment was scheduled.
+#[contractevent]
+pub struct AppointmentCreated {
+    pub version: u32,
+    pub appointment_id: u64,
+    pub patient: Address,
+    pub doctor: Address,
+}
+
+/// Versioned event: an appointment was cancelled by the patient.
+#[contractevent]
+pub struct AppointmentCancelled {
+    pub version: u32,
+    pub appointment_id: u64,
+}
+
+/// Versioned event: an appointment was marked completed by the doctor.
+#[contractevent]
+pub struct AppointmentCompleted {
+    pub version: u32,
+    pub appointment_id: u64,
 }
 
 #[contract]
