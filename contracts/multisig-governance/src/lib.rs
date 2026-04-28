@@ -27,6 +27,10 @@ pub enum Error {
     QuorumNotMet       = 10,
     /// Proposal was already finalized (executed or failed).
     AlreadyFinalized   = 11,
+    /// The address is already a signer.
+    AlreadySigner      = 12,
+    /// Removing this signer would make the threshold unreachable.
+    ThresholdBreached  = 13,
 }
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -41,6 +45,8 @@ pub enum DataKey {
     /// abstain) for a result to be valid.  Stored as a u32 count.
     QuorumMin,
     Proposal(Symbol),
+    /// Pending signer-change proposal (only one active at a time).
+    SignerProposal,
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -70,6 +76,25 @@ pub struct Proposal {
     /// Domain tag: SHA-256(contract_address ++ "multisig-governance" ++ action_id_bytes).
     /// Binds this proposal to a specific contract instance and action (#233).
     pub domain_tag: BytesN<32>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SignerChangeKind {
+    Add,
+    Remove,
+}
+
+/// A threshold-gated proposal to add or remove a signer.
+/// Only one signer-change proposal may be active at a time.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SignerProposal {
+    pub kind: SignerChangeKind,
+    pub target: Address,
+    pub approvals: Vec<Address>,
+    pub proposed_at: u64,
+    pub status: ProposalStatus,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -242,6 +267,172 @@ impl MultisigGovernance {
         env.storage()
             .persistent()
             .get(&DataKey::Proposal(action_id))
+            .ok_or(Error::ProposalNotFound)
+    }
+
+    // ── signer lifecycle ──────────────────────────────────────────────────────
+
+    /// Propose adding or removing a signer.  Only one signer-change proposal
+    /// may be active at a time.  The proposer's approval is counted immediately.
+    pub fn propose_signer_change(
+        env: Env,
+        proposer: Address,
+        kind: SignerChangeKind,
+        target: Address,
+    ) -> Result<(), Error> {
+        Self::assert_initialized(&env)?;
+        proposer.require_auth();
+        Self::assert_signer(&env, &proposer)?;
+
+        // Reject if there is already an active signer-change proposal.
+        if env.storage().persistent().has(&DataKey::SignerProposal) {
+            return Err(Error::ProposalExists);
+        }
+
+        let signers: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Signers)
+            .ok_or(Error::NotInitialized)?;
+
+        // Validate the change is meaningful.
+        match kind {
+            SignerChangeKind::Add => {
+                for s in signers.iter() {
+                    if s == target {
+                        return Err(Error::AlreadySigner);
+                    }
+                }
+            }
+            SignerChangeKind::Remove => {
+                let threshold: u32 = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::Threshold)
+                    .ok_or(Error::NotInitialized)?;
+                // After removal there must still be enough signers to meet threshold.
+                if signers.len() <= threshold {
+                    return Err(Error::ThresholdBreached);
+                }
+                // Target must be a current signer.
+                let mut found = false;
+                for s in signers.iter() {
+                    if s == target {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(Error::NotASigner);
+                }
+            }
+        }
+
+        let mut approvals: Vec<Address> = Vec::new(&env);
+        approvals.push_back(proposer.clone());
+
+        let proposal = SignerProposal {
+            kind: kind.clone(),
+            target: target.clone(),
+            approvals,
+            proposed_at: env.ledger().timestamp(),
+            status: ProposalStatus::Pending,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::SignerProposal, &proposal);
+        env.events()
+            .publish((symbol_short!("sg_prop"), kind), (proposer, target));
+        Ok(())
+    }
+
+    /// Approve the active signer-change proposal.  Executes immediately when
+    /// the approval threshold is reached.
+    pub fn approve_signer_change(env: Env, signer: Address) -> Result<(), Error> {
+        Self::assert_initialized(&env)?;
+        signer.require_auth();
+        Self::assert_signer(&env, &signer)?;
+
+        let mut proposal: SignerProposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SignerProposal)
+            .ok_or(Error::ProposalNotFound)?;
+
+        if proposal.status != ProposalStatus::Pending {
+            return Err(Error::AlreadyFinalized);
+        }
+
+        let ttl: u64 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Ttl)
+            .ok_or(Error::NotInitialized)?;
+        if env.ledger().timestamp() > proposal.proposed_at + ttl {
+            return Err(Error::Expired);
+        }
+
+        // Deduplicate.
+        for i in 0..proposal.approvals.len() {
+            if proposal.approvals.get(i).unwrap() == signer {
+                return Err(Error::AlreadyVoted);
+            }
+        }
+
+        proposal.approvals.push_back(signer.clone());
+
+        let threshold: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Threshold)
+            .ok_or(Error::NotInitialized)?;
+
+        if proposal.approvals.len() >= threshold {
+            // Execute the signer change.
+            let mut signers: Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Signers)
+                .ok_or(Error::NotInitialized)?;
+
+            match proposal.kind {
+                SignerChangeKind::Add => {
+                    signers.push_back(proposal.target.clone());
+                }
+                SignerChangeKind::Remove => {
+                    let mut new_signers: Vec<Address> = Vec::new(&env);
+                    for s in signers.iter() {
+                        if s != proposal.target {
+                            new_signers.push_back(s);
+                        }
+                    }
+                    signers = new_signers;
+                }
+            }
+
+            env.storage().persistent().set(&DataKey::Signers, &signers);
+            proposal.status = ProposalStatus::Executed;
+            env.storage()
+                .persistent()
+                .remove(&DataKey::SignerProposal);
+            env.events()
+                .publish((symbol_short!("sg_exec"), proposal.kind.clone()), proposal.target.clone());
+        } else {
+            env.storage()
+                .persistent()
+                .set(&DataKey::SignerProposal, &proposal);
+        }
+
+        env.events()
+            .publish((symbol_short!("sg_appr"), signer.clone()), signer);
+        Ok(())
+    }
+
+    pub fn get_signer_proposal(env: Env) -> Result<SignerProposal, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::SignerProposal)
             .ok_or(Error::ProposalNotFound)
     }
 
