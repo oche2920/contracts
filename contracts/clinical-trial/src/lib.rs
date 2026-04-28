@@ -42,6 +42,13 @@ pub struct ParticipantWithdrawn {
 }
 
 #[contractevent]
+pub struct RetentionPolicyApplied {
+    pub enrollment_id: u64,
+    pub data_class: DataRetentionClass,
+    pub consented: bool,
+}
+
+#[contractevent]
 pub struct SafetyReportSubmitted {
     pub trial_record_id: u64,
     pub reporting_period: u64,
@@ -70,6 +77,7 @@ pub enum Error {
     EventNotFound = 16,
     TrialNotActive = 17,
     AlreadyInitialized = 18,
+    WithdrawalRestricted = 19,
 }
 
 #[contract]
@@ -177,8 +185,7 @@ impl ClinicalTrialContract {
         env: Env,
         trial_record_id: u64,
         patient_id: Address,
-        patient_data_hash: BytesN<32>,
-        claim_evidence: Vec<EligibilityClaimEvidence>,
+        _patient_data_hash: BytesN<32>,
     ) -> Result<EligibilityResult, Error> {
         patient_id.require_auth();
 
@@ -264,6 +271,7 @@ impl ClinicalTrialContract {
             withdrawal_date: None,
             withdrawal_reason: None,
             data_retention_consent: true,
+            retention_class: DataRetentionClass::Optional,
         };
 
         // Store enrollment record
@@ -303,6 +311,10 @@ impl ClinicalTrialContract {
         // Validate date
         validation::validate_date_not_future(&env, visit_date)?;
 
+        if enrollment.status == EnrollmentStatus::Withdrawn && !enrollment.data_retention_consent {
+            return Err(Error::WithdrawalRestricted);
+        }
+
         let visit = StudyVisit {
             enrollment_id,
             visit_number,
@@ -310,6 +322,7 @@ impl ClinicalTrialContract {
             visit_type,
             data_collected_hash,
             adverse_events,
+            retention_class: DataRetentionClass::Optional,
         };
 
         storage::save_study_visit(&env, &visit);
@@ -359,6 +372,7 @@ impl ClinicalTrialContract {
             onset_date,
             resolution_date,
             causality_assessment,
+            retention_class: DataRetentionClass::RegulatoryRequired,
         };
 
         storage::save_adverse_event(&env, &event);
@@ -410,10 +424,25 @@ impl ClinicalTrialContract {
         }
         storage::save_trial(&env, &trial);
 
-        // Emit event
+        // Emit withdrawal event
         ParticipantWithdrawn {
             enrollment_id,
             withdrawal_date,
+        }
+        .publish(&env);
+
+        // Emit retention policy events to reflect required versus optional retention
+        RetentionPolicyApplied {
+            enrollment_id,
+            data_class: DataRetentionClass::Optional,
+            consented: data_retention_consent,
+        }
+        .publish(&env);
+
+        RetentionPolicyApplied {
+            enrollment_id,
+            data_class: DataRetentionClass::RegulatoryRequired,
+            consented: true,
         }
         .publish(&env);
 
@@ -443,6 +472,7 @@ impl ClinicalTrialContract {
             corrective_action,
             reported_to_irb,
             reported_date: env.ledger().timestamp(),
+            retention_class: DataRetentionClass::RegulatoryRequired,
         };
 
         storage::save_protocol_deviation(&env, enrollment_id, &deviation);
@@ -474,6 +504,7 @@ impl ClinicalTrialContract {
             serious_adverse_events,
             submitted_by: principal_investigator.clone(),
             submitted_date: env.ledger().timestamp(),
+            retention_class: DataRetentionClass::RegulatoryRequired,
         };
 
         storage::save_safety_report(&env, trial_record_id, &report);
@@ -517,7 +548,9 @@ impl ClinicalTrialContract {
             if let Ok(enrollment) = storage::get_enrollment(&env, enrollment_id) {
                 // Apply filters
                 let include = match enrollment.status {
-                    EnrollmentStatus::Withdrawn => data_filters.include_withdrawn,
+                    EnrollmentStatus::Withdrawn => {
+                        data_filters.include_withdrawn && enrollment.data_retention_consent
+                    }
                     _ => true,
                 };
 

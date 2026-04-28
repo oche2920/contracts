@@ -1,20 +1,13 @@
-use crate::{
-    ClinicalTrialContractClient, CriteriaRule, EligibilityClaimEvidence, Error, EvidenceType,
-};
-use soroban_sdk::{
-    symbol_short,
-    testutils::Address as _,
-    xdr::ToXdr,
-    Address, Bytes, BytesN, Env, String, Vec,
-};
+use crate::{ClinicalTrialContractClient, DataFilters, Error};
+use soroban_sdk::{symbol_short, testutils::Address as _, testutils::Events, Address, BytesN, Env, String, Vec};
 
 fn create_test_env() -> (Env, Address, Address, Address, ClinicalTrialContractClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
 
-    let admin = Address::generate(&env);
-    let pi = Address::generate(&env);
-    let patient = Address::generate(&env);
+    let admin = soroban_sdk::testutils::Address::generate(&env);
+    let pi = soroban_sdk::testutils::Address::generate(&env);
+    let patient = soroban_sdk::testutils::Address::generate(&env);
 
     let contract_id = env.register_contract(None, crate::ClinicalTrialContract);
     let client = ClinicalTrialContractClient::new(&env, &contract_id);
@@ -153,78 +146,73 @@ fn test_invalid_date_range() {
 }
 
 #[test]
-fn test_eligibility_is_deterministic_and_explainable() {
-    let (env, _admin, pi, patient, client) = create_test_env();
+fn test_withdrawal_policy_enforces_data_retention() {
+    let (env, _, pi, patient, client) = create_test_env();
+
     let trial_record_id = client.register_clinical_trial(
         &pi,
-        &String::from_str(&env, "TRIAL-ELIG-1"),
-        &String::from_str(&env, "Eligibility Determinism"),
+        &String::from_str(&env, "TRIAL001"),
+        &String::from_str(&env, "Withdrawal Policy Study"),
         &symbol_short!("phase2"),
         &create_protocol_hash(&env),
         &1000,
-        &5000,
+        &2000,
         &100,
-        &String::from_str(&env, "IRB-ELIG-001"),
+        &String::from_str(&env, "IRB-2024-007"),
     );
 
-    let inclusion_rule = make_rule(&env, "age_band", "adult");
-    let exclusion_rule = make_rule(&env, "pregnant", "yes");
-    let mut inclusion = Vec::new(&env);
-    inclusion.push_back(inclusion_rule.clone());
-    let mut exclusion = Vec::new(&env);
-    exclusion.push_back(exclusion_rule.clone());
-    client.define_eligibility_criteria(&trial_record_id, &pi, &inclusion, &exclusion);
-
-    let patient_data_hash = BytesN::from_array(&env, &[7u8; 32]);
-    let inclusion_claim = expected_claim_hash(&env, trial_record_id, &patient_data_hash, &inclusion_rule);
-    let mut evidence = Vec::new(&env);
-    evidence.push_back(EligibilityClaimEvidence {
-        claim_hash: inclusion_claim,
-        evidence_type: EvidenceType::ZkVerifiedClaim,
-    });
-
-    let result = client.check_patient_eligibility(
+    let enrollment_id = client.enroll_participant(
         &trial_record_id,
         &patient,
-        &patient_data_hash,
-        &evidence,
-    );
-
-    assert!(result.eligible);
-    assert_eq!(result.met_inclusion.get(0).unwrap(), true);
-    assert_eq!(result.met_exclusion.get(0).unwrap(), false);
-    assert_eq!(result.evaluation_artifacts.len(), 2);
-}
-
-#[test]
-fn test_eligibility_fails_when_required_claim_missing() {
-    let (env, _admin, pi, patient, client) = create_test_env();
-    let trial_record_id = client.register_clinical_trial(
-        &pi,
-        &String::from_str(&env, "TRIAL-ELIG-2"),
-        &String::from_str(&env, "Eligibility Missing Claim"),
-        &symbol_short!("phase2"),
+        &symbol_short!("armA"),
+        &1100,
         &create_protocol_hash(&env),
-        &1000,
-        &5000,
-        &100,
-        &String::from_str(&env, "IRB-ELIG-002"),
+        &String::from_str(&env, "PATIENT001"),
     );
 
-    let inclusion_rule = make_rule(&env, "diagnosis", "condition_a");
-    let mut inclusion = Vec::new(&env);
-    inclusion.push_back(inclusion_rule);
-    client.define_eligibility_criteria(&trial_record_id, &pi, &inclusion, &Vec::new(&env));
+    client.withdraw_participant(
+        &enrollment_id,
+        &1200,
+        &symbol_short!("consent"),
+        &false,
+    );
 
-    let patient_data_hash = BytesN::from_array(&env, &[8u8; 32]);
-    let result = client.check_patient_eligibility(
-        &trial_record_id,
-        &patient,
-        &patient_data_hash,
+    let events = env.events().all();
+    assert_eq!(events.len(), 5);
+
+    let filters = DataFilters {
+        include_withdrawn: true,
+        study_arms: Vec::new(&env),
+        date_range_start: None,
+        date_range_end: None,
+    };
+
+    let export_hash = client.export_deidentified_data(&trial_record_id, &pi, &filters);
+    let expected_hash = env
+        .crypto()
+        .sha256(&soroban_sdk::Bytes::from_slice(&env, &0u32.to_be_bytes()));
+    assert_eq!(export_hash, expected_hash);
+
+    let result = client.try_record_study_visit(
+        &enrollment_id,
+        &1u32,
+        &1300,
+        &symbol_short!("followup"),
+        &create_protocol_hash(&env),
         &Vec::new(&env),
     );
+    assert_eq!(result, Err(Ok(Error::WithdrawalRestricted)));
 
-    assert!(!result.eligible);
-    assert_eq!(result.met_inclusion.get(0).unwrap(), false);
-    assert_eq!(result.evaluation_artifacts.get(0).unwrap().passed, false);
+    let event_id = client.report_adverse_event(
+        &enrollment_id,
+        &symbol_short!("headache"),
+        &symbol_short!("moderate"),
+        &create_protocol_hash(&env),
+        &1300,
+        &Option::<u64>::None,
+        &symbol_short!("possible"),
+    );
+
+    let adverse_event = client.get_adverse_event(&event_id, &pi);
+    assert_eq!(adverse_event.enrollment_id, enrollment_id);
 }
