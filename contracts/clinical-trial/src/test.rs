@@ -1,13 +1,13 @@
-use crate::{ClinicalTrialContractClient, Error};
-use soroban_sdk::{symbol_short, testutils::Address as _, Address, BytesN, Env, String};
+use crate::{ClinicalTrialContractClient, DataFilters, Error};
+use soroban_sdk::{symbol_short, testutils::Address as _, testutils::Events, Address, BytesN, Env, String, Vec};
 
 fn create_test_env() -> (Env, Address, Address, Address, ClinicalTrialContractClient<'static>) {
     let env = Env::default();
     env.mock_all_auths();
 
-    let admin = Address::generate(&env);
-    let pi = Address::generate(&env);
-    let patient = Address::generate(&env);
+    let admin = soroban_sdk::testutils::Address::generate(&env);
+    let pi = soroban_sdk::testutils::Address::generate(&env);
+    let patient = soroban_sdk::testutils::Address::generate(&env);
 
     let contract_id = env.register_contract(None, crate::ClinicalTrialContract);
     let client = ClinicalTrialContractClient::new(&env, &contract_id);
@@ -116,4 +116,76 @@ fn test_invalid_date_range() {
     );
 
     assert!(result.is_err());
+}
+
+#[test]
+fn test_withdrawal_policy_enforces_data_retention() {
+    let (env, _, pi, patient, client) = create_test_env();
+
+    let trial_record_id = client.register_clinical_trial(
+        &pi,
+        &String::from_str(&env, "TRIAL001"),
+        &String::from_str(&env, "Withdrawal Policy Study"),
+        &symbol_short!("phase2"),
+        &create_protocol_hash(&env),
+        &1000,
+        &2000,
+        &100,
+        &String::from_str(&env, "IRB-2024-007"),
+    );
+
+    let enrollment_id = client.enroll_participant(
+        &trial_record_id,
+        &patient,
+        &symbol_short!("armA"),
+        &1100,
+        &create_protocol_hash(&env),
+        &String::from_str(&env, "PATIENT001"),
+    );
+
+    client.withdraw_participant(
+        &enrollment_id,
+        &1200,
+        &symbol_short!("consent"),
+        &false,
+    );
+
+    let events = env.events().all();
+    assert_eq!(events.len(), 5);
+
+    let filters = DataFilters {
+        include_withdrawn: true,
+        study_arms: Vec::new(&env),
+        date_range_start: None,
+        date_range_end: None,
+    };
+
+    let export_hash = client.export_deidentified_data(&trial_record_id, &pi, &filters);
+    let expected_hash = env
+        .crypto()
+        .sha256(&soroban_sdk::Bytes::from_slice(&env, &0u32.to_be_bytes()));
+    assert_eq!(export_hash, expected_hash);
+
+    let result = client.try_record_study_visit(
+        &enrollment_id,
+        &1u32,
+        &1300,
+        &symbol_short!("followup"),
+        &create_protocol_hash(&env),
+        &Vec::new(&env),
+    );
+    assert_eq!(result, Err(Ok(Error::WithdrawalRestricted)));
+
+    let event_id = client.report_adverse_event(
+        &enrollment_id,
+        &symbol_short!("headache"),
+        &symbol_short!("moderate"),
+        &create_protocol_hash(&env),
+        &1300,
+        &Option::<u64>::None,
+        &symbol_short!("possible"),
+    );
+
+    let adverse_event = client.get_adverse_event(&event_id, &pi);
+    assert_eq!(adverse_event.enrollment_id, enrollment_id);
 }

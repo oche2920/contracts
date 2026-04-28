@@ -84,6 +84,7 @@ pub struct ParticipantEnrollment {
     pub withdrawal_date: Option<u64>,
     pub withdrawal_reason: Option<Symbol>,
     pub data_retention_consent: bool,
+    pub retention_class: DataRetentionClass,
 }
 
 /// Enrollment status enumeration
@@ -93,6 +94,14 @@ pub enum EnrollmentStatus {
     Active,
     Withdrawn,
     Completed,
+}
+
+/// Data retention classes used for withdrawal policy enforcement
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataRetentionClass {
+    RegulatoryRequired,
+    Optional,
 }
 
 /// Study visit record
@@ -105,6 +114,7 @@ pub struct StudyVisit {
     pub visit_type: Symbol,
     pub data_collected_hash: BytesN<32>,
     pub adverse_events: Vec<AdverseEvent>,
+    pub retention_class: DataRetentionClass,
 }
 
 /// Adverse event report
@@ -119,6 +129,7 @@ pub struct AdverseEventReport {
     pub onset_date: u64,
     pub resolution_date: Option<u64>,
     pub causality_assessment: Symbol,
+    pub retention_class: DataRetentionClass,
 }
 
 /// Protocol deviation record
@@ -131,6 +142,7 @@ pub struct ProtocolDeviation {
     pub corrective_action: String,
     pub reported_to_irb: bool,
     pub reported_date: u64,
+    pub retention_class: DataRetentionClass,
 }
 
 /// Safety report
@@ -143,6 +155,7 @@ pub struct SafetyReport {
     pub serious_adverse_events: u32,
     pub submitted_by: Address,
     pub submitted_date: u64,
+    pub retention_class: DataRetentionClass,
 }
 
 /// Data export filters
