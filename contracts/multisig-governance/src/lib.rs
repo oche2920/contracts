@@ -2,7 +2,8 @@
 #![allow(deprecated)]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Symbol,
+    Vec,
 };
 
 mod test;
@@ -66,7 +67,12 @@ pub struct MultisigGovernance;
 impl MultisigGovernance {
     /// Initialize with a set of admin signers, an approval threshold, and a
     /// proposal TTL in seconds.
-    pub fn initialize(env: Env, signers: Vec<Address>, threshold: u32, ttl_seconds: u64) -> Result<(), Error> {
+    pub fn initialize(
+        env: Env,
+        signers: Vec<Address>,
+        threshold: u32,
+        ttl_seconds: u64,
+    ) -> Result<(), Error> {
         if env.storage().persistent().has(&DataKey::Signers) {
             return Err(Error::AlreadyInitialized);
         }
@@ -82,7 +88,12 @@ impl MultisigGovernance {
     }
 
     /// Any admin signer may open a new proposal.
-    pub fn propose_multisig_action(env: Env, signer: Address, action_id: Symbol, payload: Bytes) -> Result<(), Error> {
+    pub fn propose_multisig_action(
+        env: Env,
+        signer: Address,
+        action_id: Symbol,
+        payload: Bytes,
+    ) -> Result<(), Error> {
         signer.require_auth();
         Self::assert_signer(&env, &signer)?;
 
@@ -122,7 +133,11 @@ impl MultisigGovernance {
     /// An admin signer approves an existing proposal. Once the approval count
     /// reaches the threshold the proposal is marked Executed and an event is
     /// emitted. Expired or already-executed proposals are rejected.
-    pub fn approve_multisig_action(env: Env, signer: Address, action_id: Symbol) -> Result<(), Error> {
+    pub fn approve_multisig_action(
+        env: Env,
+        signer: Address,
+        action_id: Symbol,
+    ) -> Result<(), Error> {
         signer.require_auth();
         Self::assert_signer(&env, &signer)?;
 
@@ -180,12 +195,6 @@ impl MultisigGovernance {
             }
             proposal.status = ProposalStatus::Executed;
             return Ok(());
-        }
-
-        // If every eligible signer has voted and threshold is still not met,
-        // finalize as Failed so no further votes can arrive.
-        if participation >= eligible {
-            proposal.status = ProposalStatus::Failed;
         }
         Ok(())
     }
