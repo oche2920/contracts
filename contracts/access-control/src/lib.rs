@@ -23,6 +23,47 @@ pub enum ContractError {
     AccessPermissionNotFound = 9,
     ContractNotInitialized = 10,
     OnlyAdminCanDeactivate = 11,
+    // Role-based access control errors
+    RoleAlreadyGranted = 12,
+    RoleNotFound = 13,
+    InsufficientRole = 14,
+    RoleExpired = 15,
+}
+
+/// --------------------
+/// Roles
+/// --------------------
+/// Operational roles that can be granted to addresses. Each role scopes
+/// which privileged entry points the holder may call.
+///
+/// Hierarchy (highest → lowest privilege):
+///   Admin > Auditor > PayerReviewer | Provider | EmergencyResponder
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Role {
+    /// Full administrative control: grant/revoke roles, deactivate entities.
+    Admin,
+    /// Read-only audit access across all resources.
+    Auditor,
+    /// Insurance / payer reviewer: may adjudicate and revoke resource access.
+    PayerReviewer,
+    /// Healthcare provider: may grant resource access to patients.
+    Provider,
+    /// Emergency responder: may access any resource without prior consent
+    /// (break-glass); every use is logged.
+    EmergencyResponder,
+}
+
+/// A single role assignment stored per (address, role) pair.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RoleAssignment {
+    /// Who granted this role.
+    pub granted_by: Address,
+    /// Ledger timestamp when the role was granted.
+    pub granted_at: u64,
+    /// Optional expiry timestamp; 0 means the role never expires.
+    pub expires_at: u64,
 }
 
 /// --------------------
@@ -72,6 +113,8 @@ pub enum DataKey {
     AccessList(Address),    // Entity -> Vec<AccessPermission>
     ResourceAccess(String), // Resource -> Vec<Address> (authorized parties)
     Did(Address),
+    /// (address, role) -> RoleAssignment
+    RoleAssignment(Address, Role),
 }
 
 #[contract]
@@ -79,6 +122,50 @@ pub struct AccessControl;
 
 #[contractimpl]
 impl AccessControl {
+    // -------------------------------------------------------------------------
+    // Internal role helpers
+    // -------------------------------------------------------------------------
+
+    /// Returns the stored `RoleAssignment` for `(address, role)` if it exists
+    /// **and** has not expired. Expired entries are treated as absent.
+    fn load_active_role(
+        env: &Env,
+        address: &Address,
+        role: &Role,
+    ) -> Option<RoleAssignment> {
+        let key = DataKey::RoleAssignment(address.clone(), role.clone());
+        let assignment: RoleAssignment = env.storage().persistent().get(&key)?;
+        let now = env.ledger().timestamp();
+        if assignment.expires_at != 0 && assignment.expires_at <= now {
+            return None;
+        }
+        Some(assignment)
+    }
+
+    /// Asserts that `caller` holds `role` (and the role has not expired).
+    /// Returns `InsufficientRole` if the check fails.
+    fn require_role(
+        env: &Env,
+        caller: &Address,
+        role: &Role,
+    ) -> Result<(), ContractError> {
+        // Admin always satisfies any role check.
+        let admin_opt: Option<Address> = env.storage().persistent().get(&DataKey::Admin);
+        if let Some(ref admin) = admin_opt {
+            if caller == admin {
+                return Ok(());
+            }
+        }
+        if Self::load_active_role(env, caller, role).is_some() {
+            return Ok(());
+        }
+        Err(ContractError::InsufficientRole)
+    }
+
+    // -------------------------------------------------------------------------
+    // Initialize
+    // -------------------------------------------------------------------------
+
     /// Initialize the contract with an admin
     ///
     /// # Arguments
@@ -90,9 +177,117 @@ impl AccessControl {
         admin.require_auth();
         env.storage().persistent().set(&DataKey::Admin, &admin);
 
+        // Bootstrap: give the admin the Admin role so role checks are uniform.
+        let bootstrap = RoleAssignment {
+            granted_by: admin.clone(),
+            granted_at: env.ledger().timestamp(),
+            expires_at: 0,
+        };
+        env.storage().persistent().set(
+            &DataKey::RoleAssignment(admin.clone(), Role::Admin),
+            &bootstrap,
+        );
+
         env.events()
             .publish((symbol_short!("init"), admin), symbol_short!("success"));
         Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Role management
+    // -------------------------------------------------------------------------
+
+    /// Grant `role` to `grantee`. Only an address that itself holds the
+    /// `Admin` role (or is the stored admin address) may call this.
+    ///
+    /// # Arguments
+    /// * `granter`    - Must hold the `Admin` role.
+    /// * `grantee`    - Address receiving the role.
+    /// * `role`       - The role to grant.
+    /// * `expires_at` - Expiry timestamp; pass `0` for no expiry.
+    pub fn grant_role(
+        env: Env,
+        granter: Address,
+        grantee: Address,
+        role: Role,
+        expires_at: u64,
+    ) -> Result<(), ContractError> {
+        granter.require_auth();
+        Self::require_role(&env, &granter, &Role::Admin)?;
+
+        let key = DataKey::RoleAssignment(grantee.clone(), role.clone());
+        if env.storage().persistent().has(&key) {
+            // Allow re-grant only if the existing assignment has expired.
+            if Self::load_active_role(&env, &grantee, &role).is_some() {
+                return Err(ContractError::RoleAlreadyGranted);
+            }
+        }
+
+        let assignment = RoleAssignment {
+            granted_by: granter.clone(),
+            granted_at: env.ledger().timestamp(),
+            expires_at,
+        };
+        env.storage().persistent().set(&key, &assignment);
+
+        env.events().publish(
+            (symbol_short!("role_grt"), grantee, role),
+            symbol_short!("success"),
+        );
+        Ok(())
+    }
+
+    /// Revoke `role` from `revokee`. Only an address that holds the `Admin`
+    /// role may call this.
+    ///
+    /// # Arguments
+    /// * `revoker`  - Must hold the `Admin` role.
+    /// * `revokee`  - Address losing the role.
+    /// * `role`     - The role to revoke.
+    pub fn revoke_role(
+        env: Env,
+        revoker: Address,
+        revokee: Address,
+        role: Role,
+    ) -> Result<(), ContractError> {
+        revoker.require_auth();
+        Self::require_role(&env, &revoker, &Role::Admin)?;
+
+        let key = DataKey::RoleAssignment(revokee.clone(), role.clone());
+        if !env.storage().persistent().has(&key) {
+            return Err(ContractError::RoleNotFound);
+        }
+        env.storage().persistent().remove(&key);
+
+        env.events().publish(
+            (symbol_short!("role_rev"), revokee, role),
+            symbol_short!("success"),
+        );
+        Ok(())
+    }
+
+    /// Returns `true` if `address` currently holds `role` (and it has not
+    /// expired). Does **not** require any auth — safe to call as a view.
+    pub fn has_role(env: Env, address: Address, role: Role) -> bool {
+        // Admin address always satisfies any role.
+        let admin_opt: Option<Address> = env.storage().persistent().get(&DataKey::Admin);
+        if let Some(ref admin) = admin_opt {
+            if &address == admin {
+                return true;
+            }
+        }
+        Self::load_active_role(&env, &address, &role).is_some()
+    }
+
+    /// Returns the full `RoleAssignment` for `(address, role)`, or an error
+    /// if the role was never granted or has expired.
+    pub fn get_role_assignment(
+        env: Env,
+        address: Address,
+        role: Role,
+    ) -> Result<RoleAssignment, ContractError> {
+        Self::load_active_role(&env, &address, &role)
+            .ok_or(ContractError::RoleNotFound)
     }
 
     /// Register a new entity in the system
@@ -214,21 +409,25 @@ impl AccessControl {
         Ok(())
     }
 
-    /// Revoke access permission from an entity for a specific resource
+    /// Revoke access permission from an entity for a specific resource.
+    ///
+    /// Authorised callers (any one of):
+    /// - The original grantor of the permission.
+    /// - Any address holding the `Admin` role.
+    /// - Any address holding the `PayerReviewer` role.
     ///
     /// # Arguments
-    /// * `revoker` - The address revoking access (must be the original grantor or admin)
-    /// * `revokee` - The address losing access
-    /// * `resource_id` - The identifier of the resource
+    /// * `revoker`     - Must be the original grantor, an Admin, or a PayerReviewer.
+    /// * `revokee`     - The address losing access.
+    /// * `resource_id` - The identifier of the resource.
     pub fn revoke_access(env: Env, revoker: Address, revokee: Address, resource_id: String) -> Result<(), ContractError> {
         revoker.require_auth();
 
-        // Get admin for authorization check
-        let admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .ok_or(ContractError::ContractNotInitialized)?;
+        // Determine whether the revoker has a privileged role that allows
+        // revoking any permission (Admin or PayerReviewer).
+        let has_privileged_role =
+            Self::require_role(&env, &revoker, &Role::Admin).is_ok()
+            || Self::require_role(&env, &revoker, &Role::PayerReviewer).is_ok();
 
         // Remove from grantee's access list
         let access_key = DataKey::AccessList(revokee.clone());
@@ -244,8 +443,9 @@ impl AccessControl {
         for i in 0..access_list.len() {
             if let Some(permission) = access_list.get(i) {
                 if permission.resource_id == resource_id {
-                    // Verify revoker is either the original grantor or admin
-                    if permission.granted_by != revoker && revoker != admin {
+                    // Verify revoker is either the original grantor or holds a
+                    // privileged role.
+                    if permission.granted_by != revoker && !has_privileged_role {
                         return Err(ContractError::NotAuthorizedToRevoke);
                     }
                     found = true;
@@ -391,23 +591,17 @@ impl AccessControl {
         Ok(())
     }
 
-    /// Deactivate an entity (admin only)
+    /// Deactivate an entity.
+    ///
+    /// Requires the caller to hold the `Admin` role.
     ///
     /// # Arguments
-    /// * `admin` - The admin address
-    /// * `wallet` - The wallet address of the entity to deactivate
-    pub fn deactivate_entity(env: Env, admin: Address, wallet: Address) -> Result<(), ContractError> {
-        admin.require_auth();
-
-        let stored_admin: Address = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Admin)
-            .ok_or(ContractError::ContractNotInitialized)?;
-
-        if admin != stored_admin {
-            return Err(ContractError::OnlyAdminCanDeactivate);
-        }
+    /// * `caller` - Must hold the `Admin` role.
+    /// * `wallet` - The wallet address of the entity to deactivate.
+    pub fn deactivate_entity(env: Env, caller: Address, wallet: Address) -> Result<(), ContractError> {
+        caller.require_auth();
+        Self::require_role(&env, &caller, &Role::Admin)
+            .map_err(|_| ContractError::OnlyAdminCanDeactivate)?;
 
         let key = DataKey::Entity(wallet.clone());
         let mut entity: EntityData = env

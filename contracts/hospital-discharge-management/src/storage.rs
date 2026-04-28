@@ -1,3 +1,4 @@
+use shared_contracts::safe_increment;
 use soroban_sdk::{Env, Symbol};
 
 use crate::types::*;
@@ -18,15 +19,11 @@ const RISK: Symbol = Symbol::short("RISK");
 
 // Counter management
 pub fn get_and_increment_counter(env: &Env) -> u64 {
-    let counter: u64 = env.storage().instance().get(&COUNTER).unwrap_or(0);
-    env.storage().instance().set(&COUNTER, &(counter + 1));
-    counter
+    safe_increment(env, &COUNTER)
 }
 
 pub fn get_and_increment_appointment_counter(env: &Env) -> u64 {
-    let counter: u64 = env.storage().instance().get(&APPT_CTR).unwrap_or(0);
-    env.storage().instance().set(&APPT_CTR, &(counter + 1));
-    counter
+    safe_increment(env, &APPT_CTR)
 }
 
 // Discharge Plan storage

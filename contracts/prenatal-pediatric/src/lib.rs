@@ -699,9 +699,7 @@ impl MaternalChildHealthContract {
     }
 
     fn next_id(env: &Env, counter_key: Symbol) -> u64 {
-        let next = env.storage().instance().get(&counter_key).unwrap_or(0u64) + 1;
-        env.storage().instance().set(&counter_key, &next);
-        next
+        shared_contracts::safe_increment(env, &counter_key)
     }
 
     fn newborn_address(env: &Env, delivery_id: u64, newborn_seq: u64) -> Address {
