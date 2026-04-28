@@ -268,6 +268,7 @@ dependencies = [
 name = "care-plan"
 version = "0.1.0"
 dependencies = [
+ "Contracts",
  "soroban-sdk",
 ]
 
@@ -312,6 +313,13 @@ dependencies = [
 
 [[package]]
 name = "clinical-guideline"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "clinical-trial"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",
@@ -794,6 +802,7 @@ dependencies = [
 name = "hai-tracking"
 version = "0.1.0"
 dependencies = [
+ "Contracts",
  "soroban-sdk",
 ]
 
@@ -840,6 +849,7 @@ checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
 name = "health-records"
 version = "0.0.0"
 dependencies = [
+ "Contracts",
  "soroban-sdk",
 ]
 
@@ -901,6 +911,7 @@ dependencies = [
 name = "hospital-discharge-management"
 version = "0.1.0"
 dependencies = [
+ "Contracts",
  "soroban-sdk",
 ]
 
@@ -951,7 +962,7 @@ checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 name = "imaging-radiology"
 version = "0.0.0"
 dependencies = [
- "shared",
+ "Contracts",
  "soroban-sdk",
 ]
 
@@ -1175,6 +1186,7 @@ dependencies = [
 name = "nutrition-care-management"
 version = "0.1.0"
 dependencies = [
+ "Contracts",
  "soroban-sdk",
 ]
 
@@ -1200,6 +1212,7 @@ dependencies = [
 name = "pacs-integration"
 version = "0.0.0"
 dependencies = [
+ "Contracts",
  "soroban-sdk",
  "ttl-config",
 ]
@@ -1255,6 +1268,7 @@ dependencies = [
 name = "prenatal-pediatric"
 version = "0.1.0"
 dependencies = [
+ "Contracts",
  "soroban-sdk",
 ]
 

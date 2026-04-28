@@ -1,3 +1,4 @@
+use shared_contracts::safe_increment;
 use soroban_sdk::{Address, Env, Vec};
 
 use crate::{
@@ -7,47 +8,17 @@ use crate::{
 
 /// Get the next trial record ID and increment counter
 pub fn get_next_trial_id(env: &Env) -> u64 {
-    let current_id = env
-        .storage()
-        .instance()
-        .get::<DataKey, u64>(&DataKey::TrialCounter)
-        .unwrap_or(0);
-
-    env.storage()
-        .instance()
-        .set(&DataKey::TrialCounter, &(current_id + 1));
-
-    current_id
+    safe_increment(env, &DataKey::TrialCounter)
 }
 
 /// Get the next enrollment ID and increment counter
 pub fn get_next_enrollment_id(env: &Env) -> u64 {
-    let current_id = env
-        .storage()
-        .instance()
-        .get::<DataKey, u64>(&DataKey::EnrollmentCounter)
-        .unwrap_or(0);
-
-    env.storage()
-        .instance()
-        .set(&DataKey::EnrollmentCounter, &(current_id + 1));
-
-    current_id
+    safe_increment(env, &DataKey::EnrollmentCounter)
 }
 
 /// Get the next adverse event ID and increment counter
 pub fn get_next_event_id(env: &Env) -> u64 {
-    let current_id = env
-        .storage()
-        .instance()
-        .get::<DataKey, u64>(&DataKey::EventCounter)
-        .unwrap_or(0);
-
-    env.storage()
-        .instance()
-        .set(&DataKey::EventCounter, &(current_id + 1));
-
-    current_id
+    safe_increment(env, &DataKey::EventCounter)
 }
 
 /// Save a clinical trial record

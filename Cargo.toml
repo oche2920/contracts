@@ -23,6 +23,7 @@ members = [
   "contracts/emergency-medical-info",
   "contracts/imaging-radiology",
   "contracts/clinical-guideline",
+  "contracts/clinical-trial",
   "contracts/hospital-discharge-management",
   "contracts/care-plan",
   "contracts/pacs-integration",

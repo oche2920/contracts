@@ -5,25 +5,11 @@ use soroban_sdk::{Address, Env, String, Vec};
 use ttl_config::critical::{LEDGER_BUMP_AMOUNT, LEDGER_THRESHOLD};
 
 pub fn next_study_id(env: &Env) -> u64 {
-    let id: u64 = env
-        .storage()
-        .instance()
-        .get(&DataKey::StudyCounter)
-        .unwrap_or(0_u64)
-        + 1;
-    env.storage().instance().set(&DataKey::StudyCounter, &id);
-    id
+    safe_increment(env, &DataKey::StudyCounter)
 }
 
 pub fn next_cd_id(env: &Env) -> u64 {
-    let id: u64 = env
-        .storage()
-        .instance()
-        .get(&DataKey::CdCounter)
-        .unwrap_or(0_u64)
-        + 1;
-    env.storage().instance().set(&DataKey::CdCounter, &id);
-    id
+    safe_increment(env, &DataKey::CdCounter)
 }
 
 pub fn save_study(env: &Env, study: &ImagingStudy) {
@@ -163,12 +149,18 @@ pub fn save_qc_review(env: &Env, review: &QcReview) {
         .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP_AMOUNT);
 }
 
-pub fn save_anonymized_uid(env: &Env, study_id: u64, uid: &String) {
-    let key = DataKey::AnonymizedStudy(study_id);
+pub fn save_anonymized_uid(env: &Env, study_id: u64, rotation_epoch: u32, uid: &String) {
+    let key = DataKey::AnonymizedStudy(study_id, rotation_epoch);
     env.storage().persistent().set(&key, uid);
     env.storage()
         .persistent()
         .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP_AMOUNT);
+}
+
+pub fn load_anonymized_uid(env: &Env, study_id: u64, rotation_epoch: u32) -> Option<String> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AnonymizedStudy(study_id, rotation_epoch))
 }
 
 pub fn save_cd_record(env: &Env, record: &CdRecord) {

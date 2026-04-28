@@ -52,6 +52,8 @@ pub struct VitalStatistics {
 pub const RAW_WINDOW_SECONDS: u64 = 3600;   // 1-hour raw buckets
 pub const AGG_WINDOW_SECONDS: u64 = 86400;  // 24-hour aggregate buckets
 pub const PAGE_SIZE: u32 = 50;
+/// Minimum seconds between repeated alerts for the same patient+vital_type.
+pub const ALERT_COOLDOWN_SECONDS: u64 = 300; // 5 minutes
 
 #[contracttype]
 #[derive(Clone)]
@@ -66,6 +68,8 @@ pub enum DataKey {
     AggWindow(Address, u64),
     /// Tracks the latest raw window index written for a patient
     LatestRawWindow(Address),
+    /// Last alert timestamp for (patient, vital_type) — cooldown tracking
+    LastAlertTime(Address, Symbol),
 }
 
 #[contracttype]

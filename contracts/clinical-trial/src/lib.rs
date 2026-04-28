@@ -3,8 +3,8 @@
 #![allow(clippy::too_many_arguments)]
 
 use soroban_sdk::{
-    contract, contractimpl, contracterror, contractevent, symbol_short, Address, BytesN, Env,
-    String, Symbol, Vec,
+    contract, contracterror, contractevent, contractimpl, symbol_short, Address, Bytes, BytesN,
+    Env, String, Symbol, Vec,
 };
 
 mod storage;
@@ -42,6 +42,13 @@ pub struct ParticipantWithdrawn {
 }
 
 #[contractevent]
+pub struct RetentionPolicyApplied {
+    pub enrollment_id: u64,
+    pub data_class: DataRetentionClass,
+    pub consented: bool,
+}
+
+#[contractevent]
 pub struct SafetyReportSubmitted {
     pub trial_record_id: u64,
     pub reporting_period: u64,
@@ -70,6 +77,7 @@ pub enum Error {
     EventNotFound = 16,
     TrialNotActive = 17,
     AlreadyInitialized = 18,
+    WithdrawalRestricted = 19,
 }
 
 #[contract]
@@ -177,7 +185,7 @@ impl ClinicalTrialContract {
         env: Env,
         trial_record_id: u64,
         patient_id: Address,
-        patient_data_hash: BytesN<32>,
+        _patient_data_hash: BytesN<32>,
     ) -> Result<EligibilityResult, Error> {
         patient_id.require_auth();
 
@@ -187,22 +195,23 @@ impl ClinicalTrialContract {
         // Get eligibility criteria
         let criteria = storage::get_criteria(&env, trial_record_id)?;
 
-        // In a real implementation, this would evaluate criteria against patient data
-        // For now, we'll create a simplified check
-        let inclusion_count = criteria.inclusion_criteria.len();
-        let exclusion_count = criteria.exclusion_criteria.len();
-
         let mut met_inclusion = Vec::new(&env);
         let mut met_exclusion = Vec::new(&env);
         let disqualifying_factors = Vec::new(&env);
+        let mut evaluation_artifacts = Vec::new(&env);
 
-        // Simulate criteria evaluation (in production, this would use patient_data_hash)
-        for _ in 0..inclusion_count {
-            met_inclusion.push_back(true);
+        for rule in criteria.inclusion_criteria.iter() {
+            let (passed, artifact) =
+                Self::evaluate_rule(&env, trial_record_id, &patient_data_hash, &rule, &claim_evidence);
+            met_inclusion.push_back(passed);
+            evaluation_artifacts.push_back(artifact);
         }
 
-        for _ in 0..exclusion_count {
-            met_exclusion.push_back(false);
+        for rule in criteria.exclusion_criteria.iter() {
+            let (matched, artifact) =
+                Self::evaluate_rule(&env, trial_record_id, &patient_data_hash, &rule, &claim_evidence);
+            met_exclusion.push_back(matched);
+            evaluation_artifacts.push_back(artifact);
         }
 
         let eligible = met_inclusion.iter().all(|x| x) && met_exclusion.iter().all(|x| !x);
@@ -212,6 +221,7 @@ impl ClinicalTrialContract {
             met_inclusion,
             met_exclusion,
             disqualifying_factors,
+            evaluation_artifacts,
         })
     }
 
@@ -261,6 +271,7 @@ impl ClinicalTrialContract {
             withdrawal_date: None,
             withdrawal_reason: None,
             data_retention_consent: true,
+            retention_class: DataRetentionClass::Optional,
         };
 
         // Store enrollment record
@@ -300,6 +311,10 @@ impl ClinicalTrialContract {
         // Validate date
         validation::validate_date_not_future(&env, visit_date)?;
 
+        if enrollment.status == EnrollmentStatus::Withdrawn && !enrollment.data_retention_consent {
+            return Err(Error::WithdrawalRestricted);
+        }
+
         let visit = StudyVisit {
             enrollment_id,
             visit_number,
@@ -307,6 +322,7 @@ impl ClinicalTrialContract {
             visit_type,
             data_collected_hash,
             adverse_events,
+            retention_class: DataRetentionClass::Optional,
         };
 
         storage::save_study_visit(&env, &visit);
@@ -356,6 +372,7 @@ impl ClinicalTrialContract {
             onset_date,
             resolution_date,
             causality_assessment,
+            retention_class: DataRetentionClass::RegulatoryRequired,
         };
 
         storage::save_adverse_event(&env, &event);
@@ -407,10 +424,25 @@ impl ClinicalTrialContract {
         }
         storage::save_trial(&env, &trial);
 
-        // Emit event
+        // Emit withdrawal event
         ParticipantWithdrawn {
             enrollment_id,
             withdrawal_date,
+        }
+        .publish(&env);
+
+        // Emit retention policy events to reflect required versus optional retention
+        RetentionPolicyApplied {
+            enrollment_id,
+            data_class: DataRetentionClass::Optional,
+            consented: data_retention_consent,
+        }
+        .publish(&env);
+
+        RetentionPolicyApplied {
+            enrollment_id,
+            data_class: DataRetentionClass::RegulatoryRequired,
+            consented: true,
         }
         .publish(&env);
 
@@ -440,6 +472,7 @@ impl ClinicalTrialContract {
             corrective_action,
             reported_to_irb,
             reported_date: env.ledger().timestamp(),
+            retention_class: DataRetentionClass::RegulatoryRequired,
         };
 
         storage::save_protocol_deviation(&env, enrollment_id, &deviation);
@@ -471,6 +504,7 @@ impl ClinicalTrialContract {
             serious_adverse_events,
             submitted_by: principal_investigator.clone(),
             submitted_date: env.ledger().timestamp(),
+            retention_class: DataRetentionClass::RegulatoryRequired,
         };
 
         storage::save_safety_report(&env, trial_record_id, &report);
@@ -514,7 +548,9 @@ impl ClinicalTrialContract {
             if let Ok(enrollment) = storage::get_enrollment(&env, enrollment_id) {
                 // Apply filters
                 let include = match enrollment.status {
-                    EnrollmentStatus::Withdrawn => data_filters.include_withdrawn,
+                    EnrollmentStatus::Withdrawn => {
+                        data_filters.include_withdrawn && enrollment.data_retention_consent
+                    }
                     _ => true,
                 };
 
@@ -573,6 +609,74 @@ impl ClinicalTrialContract {
         }
 
         Ok(event)
+    }
+
+    fn evaluate_rule(
+        env: &Env,
+        trial_record_id: u64,
+        patient_data_hash: &BytesN<32>,
+        rule: &CriteriaRule,
+        claim_evidence: &Vec<EligibilityClaimEvidence>,
+    ) -> (bool, RuleEvaluationArtifact) {
+        let expected_claim_hash =
+            Self::compute_expected_claim_hash(env, trial_record_id, patient_data_hash, rule);
+
+        for evidence in claim_evidence.iter() {
+            if evidence.claim_hash == expected_claim_hash {
+                return (
+                    true,
+                    RuleEvaluationArtifact {
+                        criteria_type: rule.criteria_type.clone(),
+                        parameter: rule.parameter.clone(),
+                        operator: rule.operator.clone(),
+                        value: rule.value.clone(),
+                        expected_claim_hash: expected_claim_hash.clone(),
+                        matched_claim_hash: Some(evidence.claim_hash),
+                        evidence_type: Some(evidence.evidence_type),
+                        passed: true,
+                        explanation: String::from_str(
+                            env,
+                            "Matched deterministic claim hash from attestation/zk evidence",
+                        ),
+                    },
+                );
+            }
+        }
+
+        (
+            false,
+            RuleEvaluationArtifact {
+                criteria_type: rule.criteria_type.clone(),
+                parameter: rule.parameter.clone(),
+                operator: rule.operator.clone(),
+                value: rule.value.clone(),
+                expected_claim_hash,
+                matched_claim_hash: None,
+                evidence_type: None,
+                passed: false,
+                explanation: String::from_str(
+                    env,
+                    "No matching deterministic claim hash found for rule",
+                ),
+            },
+        )
+    }
+
+    fn compute_expected_claim_hash(
+        env: &Env,
+        trial_record_id: u64,
+        patient_data_hash: &BytesN<32>,
+        rule: &CriteriaRule,
+    ) -> BytesN<32> {
+        let mut payload = Bytes::new(env);
+        payload.append(&Bytes::from_slice(env, b"trial-eligibility-v1"));
+        payload.append(&Bytes::from_slice(env, &trial_record_id.to_be_bytes()));
+        payload.append(&patient_data_hash.clone().into());
+        payload.append(&rule.criteria_type.to_string().into());
+        payload.append(&rule.parameter.to_xdr(env));
+        payload.append(&rule.operator.to_string().into());
+        payload.append(&rule.value.to_xdr(env));
+        env.crypto().sha256(&payload).into()
     }
 }
 

@@ -28,8 +28,11 @@ pub enum DataKey {
     ViewerLastViewTs(u64, Address),
     ViewerViewChainHead(u64, Address),
     QcReview(u64),
-    AnonymizedStudy(u64),
+    /// (study_id, rotation_epoch) -> anonymized UID string
+    AnonymizedStudy(u64, u32),
     CdRecord(u64),
+    /// Global per-contract anonymization salt (instance storage)
+    AnonSalt,
 }
 
 #[contracttype]

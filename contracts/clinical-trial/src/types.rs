@@ -31,6 +31,38 @@ pub struct EligibilityResult {
     pub met_inclusion: Vec<bool>,
     pub met_exclusion: Vec<bool>,
     pub disqualifying_factors: Vec<String>,
+    pub evaluation_artifacts: Vec<RuleEvaluationArtifact>,
+}
+
+/// Type of evidence used for eligibility checks.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EvidenceType {
+    Attestation,
+    ZkVerifiedClaim,
+}
+
+/// Claim evidence supplied during deterministic eligibility evaluation.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EligibilityClaimEvidence {
+    pub claim_hash: BytesN<32>,
+    pub evidence_type: EvidenceType,
+}
+
+/// Explainable pass/fail artifact for each rule evaluation.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct RuleEvaluationArtifact {
+    pub criteria_type: Symbol,
+    pub parameter: String,
+    pub operator: Symbol,
+    pub value: String,
+    pub expected_claim_hash: BytesN<32>,
+    pub matched_claim_hash: Option<BytesN<32>>,
+    pub evidence_type: Option<EvidenceType>,
+    pub passed: bool,
+    pub explanation: String,
 }
 
 /// Clinical trial record
@@ -84,6 +116,7 @@ pub struct ParticipantEnrollment {
     pub withdrawal_date: Option<u64>,
     pub withdrawal_reason: Option<Symbol>,
     pub data_retention_consent: bool,
+    pub retention_class: DataRetentionClass,
 }
 
 /// Enrollment status enumeration
@@ -93,6 +126,14 @@ pub enum EnrollmentStatus {
     Active,
     Withdrawn,
     Completed,
+}
+
+/// Data retention classes used for withdrawal policy enforcement
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DataRetentionClass {
+    RegulatoryRequired,
+    Optional,
 }
 
 /// Study visit record
@@ -105,6 +146,7 @@ pub struct StudyVisit {
     pub visit_type: Symbol,
     pub data_collected_hash: BytesN<32>,
     pub adverse_events: Vec<AdverseEvent>,
+    pub retention_class: DataRetentionClass,
 }
 
 /// Adverse event report
@@ -119,6 +161,7 @@ pub struct AdverseEventReport {
     pub onset_date: u64,
     pub resolution_date: Option<u64>,
     pub causality_assessment: Symbol,
+    pub retention_class: DataRetentionClass,
 }
 
 /// Protocol deviation record
@@ -131,6 +174,7 @@ pub struct ProtocolDeviation {
     pub corrective_action: String,
     pub reported_to_irb: bool,
     pub reported_date: u64,
+    pub retention_class: DataRetentionClass,
 }
 
 /// Safety report
@@ -143,6 +187,7 @@ pub struct SafetyReport {
     pub serious_adverse_events: u32,
     pub submitted_by: Address,
     pub submitted_date: u64,
+    pub retention_class: DataRetentionClass,
 }
 
 /// Data export filters

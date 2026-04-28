@@ -192,8 +192,7 @@ impl ImagingRadiology {
         provider_id.require_auth();
 
         let counter_key = DataKey::OrderCounter;
-        let order_id: u64 = env.storage().persistent().get(&counter_key).unwrap_or(0) + 1;
-        env.storage().persistent().set(&counter_key, &order_id);
+        let order_id: u64 = shared_contracts::safe_increment_persistent(&env, &counter_key);
 
         let order = ImagingOrder {
             order_id,

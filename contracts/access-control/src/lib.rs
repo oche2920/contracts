@@ -27,6 +27,12 @@ pub enum ContractError {
     CommitNotFound = 12,
     CommitHashMismatch = 13,
     CommitAlreadyUsed = 14,
+    // #223: unified consent engine
+    ConsentNotFound = 15,
+    ConsentExpired = 16,
+    ConsentRevoked = 17,
+    ConsentDenied = 18,
+    InvalidScopeMask = 19,
 }
 
 /// --------------------
@@ -69,6 +75,49 @@ pub struct AccessPermission {
 }
 
 /// --------------------
+/// #223: Unified Consent Record
+/// --------------------
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConsentStatus {
+    Active,
+    Revoked,
+    Expired,
+}
+
+/// Index entry for subject's consent list.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConsentIndexEntry {
+    pub grantee: Address,
+    pub purpose_code: String,
+}
+
+/// A structured consent object capturing all HIPAA/GDPR-relevant semantics.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConsentRecord {
+    /// The data subject (patient) granting consent.
+    pub subject: Address,
+    /// The party receiving access (provider, researcher, etc.).
+    pub grantee: Address,
+    /// Bitmask of permitted operations (e.g. 0x01=read, 0x02=write, 0x04=share).
+    pub scope_mask: u32,
+    /// Purpose code (e.g. "treatment", "research", "billing").
+    pub purpose_code: String,
+    /// Legal basis (e.g. "explicit_consent", "vital_interest", "legal_obligation").
+    pub legal_basis: String,
+    /// Unix timestamp when consent was granted.
+    pub granted_at: u64,
+    /// Unix timestamp when consent expires; 0 = no expiry.
+    pub expires_at: u64,
+    /// Current status.
+    pub status: ConsentStatus,
+    /// Monotonic operation ID for auditability.
+    pub op_id: u64,
+}
+
+/// --------------------
 /// #228: Pending commit for commit-reveal anti-front-running
 /// --------------------
 #[contracttype]
@@ -95,6 +144,11 @@ pub enum DataKey {
     OpCounter,
     // #228: commit-reveal: hash -> PendingCommit
     Commit(BytesN<32>),
+    // #223: unified consent engine
+    // (subject, grantee, purpose_code) -> ConsentRecord
+    Consent(Address, Address, String),
+    // subject -> Vec<(grantee, purpose_code)> for enumeration
+    SubjectConsents(Address),
 }
 
 #[contract]
@@ -102,6 +156,50 @@ pub struct AccessControl;
 
 #[contractimpl]
 impl AccessControl {
+    // -------------------------------------------------------------------------
+    // Internal role helpers
+    // -------------------------------------------------------------------------
+
+    /// Returns the stored `RoleAssignment` for `(address, role)` if it exists
+    /// **and** has not expired. Expired entries are treated as absent.
+    fn load_active_role(
+        env: &Env,
+        address: &Address,
+        role: &Role,
+    ) -> Option<RoleAssignment> {
+        let key = DataKey::RoleAssignment(address.clone(), role.clone());
+        let assignment: RoleAssignment = env.storage().persistent().get(&key)?;
+        let now = env.ledger().timestamp();
+        if assignment.expires_at != 0 && assignment.expires_at <= now {
+            return None;
+        }
+        Some(assignment)
+    }
+
+    /// Asserts that `caller` holds `role` (and the role has not expired).
+    /// Returns `InsufficientRole` if the check fails.
+    fn require_role(
+        env: &Env,
+        caller: &Address,
+        role: &Role,
+    ) -> Result<(), ContractError> {
+        // Admin always satisfies any role check.
+        let admin_opt: Option<Address> = env.storage().persistent().get(&DataKey::Admin);
+        if let Some(ref admin) = admin_opt {
+            if caller == admin {
+                return Ok(());
+            }
+        }
+        if Self::load_active_role(env, caller, role).is_some() {
+            return Ok(());
+        }
+        Err(ContractError::InsufficientRole)
+    }
+
+    // -------------------------------------------------------------------------
+    // Initialize
+    // -------------------------------------------------------------------------
+
     /// Initialize the contract with an admin
     pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
         if env.storage().persistent().has(&DataKey::Admin) {
@@ -110,9 +208,117 @@ impl AccessControl {
         admin.require_auth();
         env.storage().persistent().set(&DataKey::Admin, &admin);
 
+        // Bootstrap: give the admin the Admin role so role checks are uniform.
+        let bootstrap = RoleAssignment {
+            granted_by: admin.clone(),
+            granted_at: env.ledger().timestamp(),
+            expires_at: 0,
+        };
+        env.storage().persistent().set(
+            &DataKey::RoleAssignment(admin.clone(), Role::Admin),
+            &bootstrap,
+        );
+
         env.events()
             .publish((symbol_short!("init"), admin), symbol_short!("success"));
         Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Role management
+    // -------------------------------------------------------------------------
+
+    /// Grant `role` to `grantee`. Only an address that itself holds the
+    /// `Admin` role (or is the stored admin address) may call this.
+    ///
+    /// # Arguments
+    /// * `granter`    - Must hold the `Admin` role.
+    /// * `grantee`    - Address receiving the role.
+    /// * `role`       - The role to grant.
+    /// * `expires_at` - Expiry timestamp; pass `0` for no expiry.
+    pub fn grant_role(
+        env: Env,
+        granter: Address,
+        grantee: Address,
+        role: Role,
+        expires_at: u64,
+    ) -> Result<(), ContractError> {
+        granter.require_auth();
+        Self::require_role(&env, &granter, &Role::Admin)?;
+
+        let key = DataKey::RoleAssignment(grantee.clone(), role.clone());
+        if env.storage().persistent().has(&key) {
+            // Allow re-grant only if the existing assignment has expired.
+            if Self::load_active_role(&env, &grantee, &role).is_some() {
+                return Err(ContractError::RoleAlreadyGranted);
+            }
+        }
+
+        let assignment = RoleAssignment {
+            granted_by: granter.clone(),
+            granted_at: env.ledger().timestamp(),
+            expires_at,
+        };
+        env.storage().persistent().set(&key, &assignment);
+
+        env.events().publish(
+            (symbol_short!("role_grt"), grantee, role),
+            symbol_short!("success"),
+        );
+        Ok(())
+    }
+
+    /// Revoke `role` from `revokee`. Only an address that holds the `Admin`
+    /// role may call this.
+    ///
+    /// # Arguments
+    /// * `revoker`  - Must hold the `Admin` role.
+    /// * `revokee`  - Address losing the role.
+    /// * `role`     - The role to revoke.
+    pub fn revoke_role(
+        env: Env,
+        revoker: Address,
+        revokee: Address,
+        role: Role,
+    ) -> Result<(), ContractError> {
+        revoker.require_auth();
+        Self::require_role(&env, &revoker, &Role::Admin)?;
+
+        let key = DataKey::RoleAssignment(revokee.clone(), role.clone());
+        if !env.storage().persistent().has(&key) {
+            return Err(ContractError::RoleNotFound);
+        }
+        env.storage().persistent().remove(&key);
+
+        env.events().publish(
+            (symbol_short!("role_rev"), revokee, role),
+            symbol_short!("success"),
+        );
+        Ok(())
+    }
+
+    /// Returns `true` if `address` currently holds `role` (and it has not
+    /// expired). Does **not** require any auth — safe to call as a view.
+    pub fn has_role(env: Env, address: Address, role: Role) -> bool {
+        // Admin address always satisfies any role.
+        let admin_opt: Option<Address> = env.storage().persistent().get(&DataKey::Admin);
+        if let Some(ref admin) = admin_opt {
+            if &address == admin {
+                return true;
+            }
+        }
+        Self::load_active_role(&env, &address, &role).is_some()
+    }
+
+    /// Returns the full `RoleAssignment` for `(address, role)`, or an error
+    /// if the role was never granted or has expired.
+    pub fn get_role_assignment(
+        env: Env,
+        address: Address,
+        role: Role,
+    ) -> Result<RoleAssignment, ContractError> {
+        Self::load_active_role(&env, &address, &role)
+            .ok_or(ContractError::RoleNotFound)
     }
 
     /// Register a new entity in the system
@@ -520,6 +726,173 @@ impl AccessControl {
     /// Returns the DID registered for an address, if present.
     pub fn get_did(env: Env, address: Address) -> Option<Bytes> {
         env.storage().persistent().get(&DataKey::Did(address))
+    }
+
+    // -----------------------------------------------------------------------
+    // #223: Unified Consent Engine
+    // -----------------------------------------------------------------------
+
+    /// Grant structured consent from a subject (patient) to a grantee.
+    ///
+    /// # Arguments
+    /// * `subject`      - The data subject granting consent (must auth)
+    /// * `grantee`      - The party receiving access
+    /// * `scope_mask`   - Bitmask: 0x01=read, 0x02=write, 0x04=share
+    /// * `purpose_code` - e.g. "treatment", "research", "billing"
+    /// * `legal_basis`  - e.g. "explicit_consent", "vital_interest"
+    /// * `expires_at`   - Unix timestamp; 0 = no expiry
+    pub fn grant_consent(
+        env: Env,
+        subject: Address,
+        grantee: Address,
+        scope_mask: u32,
+        purpose_code: String,
+        legal_basis: String,
+        expires_at: u64,
+    ) -> Result<u64, ContractError> {
+        subject.require_auth();
+
+        if scope_mask == 0 {
+            return Err(ContractError::InvalidScopeMask);
+        }
+
+        let op_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::OpCounter)
+            .unwrap_or(0u64)
+            + 1;
+        env.storage().instance().set(&DataKey::OpCounter, &op_id);
+
+        let record = ConsentRecord {
+            subject: subject.clone(),
+            grantee: grantee.clone(),
+            scope_mask,
+            purpose_code: purpose_code.clone(),
+            legal_basis,
+            granted_at: env.ledger().timestamp(),
+            expires_at,
+            status: ConsentStatus::Active,
+            op_id,
+        };
+
+        let key = DataKey::Consent(subject.clone(), grantee.clone(), purpose_code.clone());
+        env.storage().persistent().set(&key, &record);
+
+        // Update subject's consent index.
+        let idx_key = DataKey::SubjectConsents(subject.clone());
+        let mut index: Vec<ConsentIndexEntry> = env
+            .storage()
+            .persistent()
+            .get(&idx_key)
+            .unwrap_or(Vec::new(&env));
+        // Replace existing entry for same (grantee, purpose) if present.
+        let mut found = false;
+        for i in 0..index.len() {
+            if let Some(entry) = index.get(i) {
+                if entry.grantee == grantee && entry.purpose_code == purpose_code {
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if !found {
+            index.push_back(ConsentIndexEntry {
+                grantee: grantee.clone(),
+                purpose_code: purpose_code.clone(),
+            });
+            env.storage().persistent().set(&idx_key, &index);
+        }
+
+        env.events().publish(
+            (symbol_short!("consent"), subject, grantee),
+            (purpose_code, scope_mask, op_id),
+        );
+
+        Ok(op_id)
+    }
+
+    /// Revoke a previously granted consent.
+    pub fn revoke_consent(
+        env: Env,
+        subject: Address,
+        grantee: Address,
+        purpose_code: String,
+    ) -> Result<u64, ContractError> {
+        subject.require_auth();
+
+        let key = DataKey::Consent(subject.clone(), grantee.clone(), purpose_code.clone());
+        let mut record: ConsentRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(ContractError::ConsentNotFound)?;
+
+        record.status = ConsentStatus::Revoked;
+        env.storage().persistent().set(&key, &record);
+
+        let op_id: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::OpCounter)
+            .unwrap_or(0u64)
+            + 1;
+        env.storage().instance().set(&DataKey::OpCounter, &op_id);
+
+        env.events().publish(
+            (symbol_short!("rev_cst"), subject, grantee),
+            (purpose_code, op_id),
+        );
+
+        Ok(op_id)
+    }
+
+    /// Check whether active consent exists for (subject, grantee, purpose_code)
+    /// and that the requested scope bits are all covered.
+    /// Returns `Ok(())` if access is permitted, or an error otherwise.
+    pub fn check_consent(
+        env: Env,
+        subject: Address,
+        grantee: Address,
+        purpose_code: String,
+        required_scope: u32,
+    ) -> Result<(), ContractError> {
+        let key = DataKey::Consent(subject, grantee, purpose_code);
+        let record: ConsentRecord = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(ContractError::ConsentNotFound)?;
+
+        match record.status {
+            ConsentStatus::Revoked => return Err(ContractError::ConsentRevoked),
+            ConsentStatus::Expired => return Err(ContractError::ConsentExpired),
+            ConsentStatus::Active => {}
+        }
+
+        let now = env.ledger().timestamp();
+        if record.expires_at != 0 && now > record.expires_at {
+            return Err(ContractError::ConsentExpired);
+        }
+
+        if required_scope != 0 && (record.scope_mask & required_scope) != required_scope {
+            return Err(ContractError::ConsentDenied);
+        }
+
+        Ok(())
+    }
+
+    /// Return the full consent record for a (subject, grantee, purpose_code) triple.
+    pub fn get_consent(
+        env: Env,
+        subject: Address,
+        grantee: Address,
+        purpose_code: String,
+    ) -> Result<ConsentRecord, ContractError> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Consent(subject, grantee, purpose_code))
+            .ok_or(ContractError::ConsentNotFound)
     }
 
     // -----------------------------------------------------------------------

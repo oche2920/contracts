@@ -1,3 +1,4 @@
+use shared_contracts::safe_increment_persistent;
 use soroban_sdk::{Address, Env, Vec};
 
 use crate::types::{
@@ -9,66 +10,23 @@ use crate::types::{
 // -----------------------------------------------------------------------
 
 pub fn next_care_plan_id(env: &Env) -> u64 {
-    let id: u64 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::CarePlanCounter)
-        .unwrap_or(0);
-    let next = id + 1;
-    env.storage()
-        .persistent()
-        .set(&DataKey::CarePlanCounter, &next);
-    next
+    safe_increment_persistent(env, &DataKey::CarePlanCounter)
 }
 
 pub fn next_goal_id(env: &Env) -> u64 {
-    let id: u64 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::GoalCounter)
-        .unwrap_or(0);
-    let next = id + 1;
-    env.storage().persistent().set(&DataKey::GoalCounter, &next);
-    next
+    safe_increment_persistent(env, &DataKey::GoalCounter)
 }
 
 pub fn next_intervention_id(env: &Env) -> u64 {
-    let id: u64 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::InterventionCounter)
-        .unwrap_or(0);
-    let next = id + 1;
-    env.storage()
-        .persistent()
-        .set(&DataKey::InterventionCounter, &next);
-    next
+    safe_increment_persistent(env, &DataKey::InterventionCounter)
 }
 
 pub fn next_barrier_id(env: &Env) -> u64 {
-    let id: u64 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::BarrierCounter)
-        .unwrap_or(0);
-    let next = id + 1;
-    env.storage()
-        .persistent()
-        .set(&DataKey::BarrierCounter, &next);
-    next
+    safe_increment_persistent(env, &DataKey::BarrierCounter)
 }
 
 pub fn next_review_id(env: &Env) -> u64 {
-    let id: u64 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::ReviewCounter)
-        .unwrap_or(0);
-    let next = id + 1;
-    env.storage()
-        .persistent()
-        .set(&DataKey::ReviewCounter, &next);
-    next
+    safe_increment_persistent(env, &DataKey::ReviewCounter)
 }
 
 // -----------------------------------------------------------------------

@@ -525,3 +525,311 @@ fn test_revoke_access_not_authorized() {
     let result = client.try_revoke_access(&other, &doctor, &resource);
     assert_eq!(result, Err(Ok(ContractError::NotAuthorizedToRevoke)));
 }
+
+// =============================================================================
+// Role-based access control tests
+// =============================================================================
+
+fn setup(env: &Env) -> (Address, AccessControlClient) {
+    let contract_id = env.register(AccessControl, ());
+    let client = AccessControlClient::new(env, &contract_id);
+    let admin = Address::generate(env);
+    client.initialize(&admin);
+    (admin, client)
+}
+
+// --- grant_role / has_role ---------------------------------------------------
+
+#[test]
+fn test_grant_role_and_has_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client) = setup(&env);
+
+    let provider = Address::generate(&env);
+    assert!(!client.has_role(&provider, &Role::Provider));
+
+    client.grant_role(&admin, &provider, &Role::Provider, &0);
+    assert!(client.has_role(&provider, &Role::Provider));
+}
+
+#[test]
+fn test_admin_always_has_every_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client) = setup(&env);
+
+    // Admin satisfies every role check without an explicit grant.
+    assert!(client.has_role(&admin, &Role::Provider));
+    assert!(client.has_role(&admin, &Role::PayerReviewer));
+    assert!(client.has_role(&admin, &Role::Auditor));
+    assert!(client.has_role(&admin, &Role::EmergencyResponder));
+}
+
+#[test]
+fn test_grant_role_non_admin_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, client) = setup(&env);
+
+    let non_admin = Address::generate(&env);
+    let target = Address::generate(&env);
+
+    let result = client.try_grant_role(&non_admin, &target, &Role::Provider, &0);
+    assert_eq!(result, Err(Ok(ContractError::InsufficientRole)));
+}
+
+#[test]
+fn test_grant_role_duplicate_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client) = setup(&env);
+
+    let provider = Address::generate(&env);
+    client.grant_role(&admin, &provider, &Role::Provider, &0);
+
+    let result = client.try_grant_role(&admin, &provider, &Role::Provider, &0);
+    assert_eq!(result, Err(Ok(ContractError::RoleAlreadyGranted)));
+}
+
+// --- revoke_role -------------------------------------------------------------
+
+#[test]
+fn test_revoke_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client) = setup(&env);
+
+    let auditor = Address::generate(&env);
+    client.grant_role(&admin, &auditor, &Role::Auditor, &0);
+    assert!(client.has_role(&auditor, &Role::Auditor));
+
+    client.revoke_role(&admin, &auditor, &Role::Auditor);
+    assert!(!client.has_role(&auditor, &Role::Auditor));
+}
+
+#[test]
+fn test_revoke_role_not_found() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client) = setup(&env);
+
+    let nobody = Address::generate(&env);
+    let result = client.try_revoke_role(&admin, &nobody, &Role::Auditor);
+    assert_eq!(result, Err(Ok(ContractError::RoleNotFound)));
+}
+
+#[test]
+fn test_revoke_role_non_admin_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client) = setup(&env);
+
+    let auditor = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.grant_role(&admin, &auditor, &Role::Auditor, &0);
+
+    let result = client.try_revoke_role(&non_admin, &auditor, &Role::Auditor);
+    assert_eq!(result, Err(Ok(ContractError::InsufficientRole)));
+}
+
+// --- role expiry -------------------------------------------------------------
+
+#[test]
+fn test_role_expires() {
+    use soroban_sdk::testutils::Ledger;
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client) = setup(&env);
+
+    let reviewer = Address::generate(&env);
+    // Grant role that expires at timestamp 100.
+    client.grant_role(&admin, &reviewer, &Role::PayerReviewer, &100);
+    assert!(client.has_role(&reviewer, &Role::PayerReviewer));
+
+    // Advance past expiry.
+    env.ledger().set_timestamp(200);
+    assert!(!client.has_role(&reviewer, &Role::PayerReviewer));
+}
+
+#[test]
+fn test_expired_role_can_be_regranted() {
+    use soroban_sdk::testutils::Ledger;
+
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client) = setup(&env);
+
+    let reviewer = Address::generate(&env);
+    client.grant_role(&admin, &reviewer, &Role::PayerReviewer, &100);
+
+    env.ledger().set_timestamp(200);
+    // Expired — re-grant should succeed.
+    client.grant_role(&admin, &reviewer, &Role::PayerReviewer, &0);
+    assert!(client.has_role(&reviewer, &Role::PayerReviewer));
+}
+
+// --- get_role_assignment -----------------------------------------------------
+
+#[test]
+fn test_get_role_assignment() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client) = setup(&env);
+
+    let provider = Address::generate(&env);
+    client.grant_role(&admin, &provider, &Role::Provider, &999);
+
+    let assignment = client.get_role_assignment(&provider, &Role::Provider);
+    assert_eq!(assignment.granted_by, admin);
+    assert_eq!(assignment.expires_at, 999);
+}
+
+#[test]
+fn test_get_role_assignment_not_found() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, client) = setup(&env);
+
+    let nobody = Address::generate(&env);
+    let result = client.try_get_role_assignment(&nobody, &Role::Auditor);
+    assert_eq!(result, Err(Ok(ContractError::RoleNotFound)));
+}
+
+// --- deactivate_entity uses role check ---------------------------------------
+
+#[test]
+fn test_deactivate_entity_by_admin_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client) = setup(&env);
+
+    let hospital = Address::generate(&env);
+    client.register_entity(
+        &hospital,
+        &EntityType::Hospital,
+        &String::from_str(&env, "City Hospital"),
+        &String::from_str(&env, "metadata"),
+    );
+
+    client.deactivate_entity(&admin, &hospital);
+    assert!(!client.get_entity(&hospital).active);
+}
+
+#[test]
+fn test_deactivate_entity_by_granted_admin_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client) = setup(&env);
+
+    // Grant Admin role to a second address.
+    let second_admin = Address::generate(&env);
+    client.grant_role(&admin, &second_admin, &Role::Admin, &0);
+
+    let hospital = Address::generate(&env);
+    client.register_entity(
+        &hospital,
+        &EntityType::Hospital,
+        &String::from_str(&env, "City Hospital"),
+        &String::from_str(&env, "metadata"),
+    );
+
+    client.deactivate_entity(&second_admin, &hospital);
+    assert!(!client.get_entity(&hospital).active);
+}
+
+#[test]
+fn test_deactivate_entity_non_admin_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (_admin, client) = setup(&env);
+
+    let hospital = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    client.register_entity(
+        &hospital,
+        &EntityType::Hospital,
+        &String::from_str(&env, "City Hospital"),
+        &String::from_str(&env, "metadata"),
+    );
+
+    let result = client.try_deactivate_entity(&non_admin, &hospital);
+    assert_eq!(result, Err(Ok(ContractError::OnlyAdminCanDeactivate)));
+}
+
+// --- revoke_access uses role check -------------------------------------------
+
+#[test]
+fn test_revoke_access_by_payer_reviewer_role() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client) = setup(&env);
+
+    let hospital = Address::generate(&env);
+    let doctor = Address::generate(&env);
+    let payer = Address::generate(&env);
+
+    client.register_entity(
+        &hospital,
+        &EntityType::Hospital,
+        &String::from_str(&env, "City Hospital"),
+        &String::from_str(&env, "metadata"),
+    );
+    client.register_entity(
+        &doctor,
+        &EntityType::Doctor,
+        &String::from_str(&env, "Dr. Smith"),
+        &String::from_str(&env, "metadata"),
+    );
+
+    let resource = String::from_str(&env, "patient-records");
+    client.grant_access(&hospital, &doctor, &resource, &0);
+
+    // Grant PayerReviewer role to payer.
+    client.grant_role(&admin, &payer, &Role::PayerReviewer, &0);
+
+    // Payer (not the original grantor) can revoke.
+    client.revoke_access(&payer, &doctor, &resource);
+    assert!(!client.check_access(&doctor, &resource));
+}
+
+#[test]
+fn test_revoke_access_by_unprivileged_non_grantor_rejected() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (admin, client) = setup(&env);
+
+    let hospital = Address::generate(&env);
+    let doctor = Address::generate(&env);
+    let other = Address::generate(&env);
+
+    client.register_entity(
+        &hospital,
+        &EntityType::Hospital,
+        &String::from_str(&env, "City Hospital"),
+        &String::from_str(&env, "metadata"),
+    );
+    client.register_entity(
+        &doctor,
+        &EntityType::Doctor,
+        &String::from_str(&env, "Dr. Smith"),
+        &String::from_str(&env, "metadata"),
+    );
+    client.register_entity(
+        &other,
+        &EntityType::Doctor,
+        &String::from_str(&env, "Dr. Other"),
+        &String::from_str(&env, "metadata"),
+    );
+
+    let resource = String::from_str(&env, "patient-records");
+    client.grant_access(&hospital, &doctor, &resource, &0);
+
+    // `other` has no role and is not the grantor.
+    let result = client.try_revoke_access(&other, &doctor, &resource);
+    assert_eq!(result, Err(Ok(ContractError::NotAuthorizedToRevoke)));
+
+    // Silence unused-variable warning for admin.
+    let _ = admin;
+}
