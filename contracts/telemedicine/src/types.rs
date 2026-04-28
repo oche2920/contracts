@@ -11,6 +11,36 @@ pub enum Error {
     SessionExpired = 5,
     InvalidSessionToken = 6,
     SessionAlreadyUsed = 7,
+    ProviderNotLicensed = 8,
+    PolicyNotFound = 9,
+    LicenseExpired = 10,
+    CrossStateNotPermitted = 11,
+}
+
+/// On-chain record of a provider's license in a given jurisdiction (state/region).
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderLicense {
+    pub provider_id: Address,
+    /// ISO 3166-2 subdivision code, e.g. "US-NY"
+    pub jurisdiction: String,
+    pub license_number: String,
+    /// Unix timestamp; 0 = no expiry
+    pub valid_until: u64,
+    pub active: bool,
+}
+
+/// Jurisdiction policy: whether cross-state practice is permitted and which
+/// compact memberships apply.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct JurisdictionPolicy {
+    /// The patient's jurisdiction
+    pub jurisdiction: String,
+    /// If true, providers licensed in any compact-member state may practice here
+    pub allows_compact: bool,
+    /// Comma-separated list of compact-member state codes, e.g. "US-NY,US-CA"
+    pub compact_members: String,
 }
 
 #[contracttype]
@@ -71,4 +101,8 @@ pub enum DataKey {
     VisitCount,
     SessionNonce,
     Session(u64),
+    /// (provider_id, jurisdiction) -> ProviderLicense
+    LicenseRegistry(Address, String),
+    /// jurisdiction -> JurisdictionPolicy
+    JurisdictionPolicy(String),
 }

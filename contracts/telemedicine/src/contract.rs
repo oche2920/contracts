@@ -1,6 +1,6 @@
 use crate::types::{
-    DataKey, EligibilityResult, Error, PrescriptionRequest, SessionRecord, VirtualVisit,
-    VisitStatus,
+    DataKey, EligibilityResult, Error, JurisdictionPolicy, ProviderLicense, PrescriptionRequest,
+    SessionRecord, VirtualVisit, VisitStatus,
 };
 use soroban_sdk::{
     contract, contractimpl, xdr::ToXdr, Address, Bytes, BytesN, Env, String, Symbol, Vec,
@@ -67,6 +67,7 @@ impl TelemedicineContract {
         provider_id: Address,
         session_start_time: u64,
         patient_location_state: String,
+        provider_state: String,
     ) -> Result<BytesN<32>, Error> {
         provider_id.require_auth();
 
@@ -84,7 +85,17 @@ impl TelemedicineContract {
             return Err(Error::InvalidStatusTransition);
         }
 
-        // Let's assume validation happened via verify_telemedicine_eligibility before calling
+        // Enforce eligibility before allowing session start.
+        let eligibility = Self::verify_telemedicine_eligibility(
+            env.clone(),
+            visit.patient_id.clone(),
+            provider_id.clone(),
+            patient_location_state.clone(),
+            provider_state,
+        )?;
+        if !eligibility.is_eligible {
+            return Err(Error::IneligibleLocation);
+        }
 
         visit.status = VisitStatus::InProgress;
         visit.session_start = Some(session_start_time);
@@ -231,26 +242,126 @@ impl TelemedicineContract {
 
     pub fn verify_telemedicine_eligibility(
         env: Env,
-        _patient_id: Address,  // Unused in this mock, but present in signature
-        _provider_id: Address, // Unused in this mock, but present in signature
+        _patient_id: Address,
+        provider_id: Address,
         patient_state: String,
         provider_state: String,
     ) -> Result<EligibilityResult, Error> {
-        // Here we mock cross-state licensing validation.
-        // If states are identical, they are eligible.
-        // Otherwise, not eligible (in reality, would check a registry of allowed cross-state licenses).
+        let now = env.ledger().timestamp();
 
-        if patient_state == provider_state {
-            Ok(EligibilityResult {
-                is_eligible: true,
-                reason: String::from_str(&env, "Same state"),
-            })
-        } else {
-            Ok(EligibilityResult {
-                is_eligible: false,
-                reason: String::from_str(&env, "Cross-state practice not allowed in this mock"),
-            })
+        // 1. Look up the provider's license for the patient's jurisdiction (where care is delivered).
+        let license_key = DataKey::LicenseRegistry(provider_id.clone(), patient_state.clone());
+        let home_license: Option<ProviderLicense> =
+            env.storage().persistent().get(&license_key);
+
+        // 2. Check direct license in patient's state.
+        if let Some(ref lic) = home_license {
+            if lic.active && (lic.valid_until == 0 || lic.valid_until > now) {
+                return Ok(EligibilityResult {
+                    is_eligible: true,
+                    reason: String::from_str(&env, "Licensed in patient jurisdiction"),
+                });
+            }
+            if lic.active && lic.valid_until > 0 && lic.valid_until <= now {
+                return Err(Error::LicenseExpired);
+            }
         }
+
+        // 3. Same-state shortcut: if provider is licensed in their own state and
+        //    patient_state == provider_state, allow (no cross-state issue).
+        if patient_state == provider_state {
+            let provider_home_key =
+                DataKey::LicenseRegistry(provider_id.clone(), provider_state.clone());
+            let provider_home: Option<ProviderLicense> =
+                env.storage().persistent().get(&provider_home_key);
+            if let Some(lic) = provider_home {
+                if lic.active && (lic.valid_until == 0 || lic.valid_until > now) {
+                    return Ok(EligibilityResult {
+                        is_eligible: true,
+                        reason: String::from_str(&env, "Same jurisdiction"),
+                    });
+                }
+            }
+        }
+
+        // 4. Cross-state: check jurisdiction policy for compact membership.
+        let policy_key = DataKey::JurisdictionPolicy(patient_state.clone());
+        let policy: Option<JurisdictionPolicy> = env.storage().persistent().get(&policy_key);
+
+        if let Some(pol) = policy {
+            if pol.allows_compact {
+                // Check if provider holds a valid license in any compact-member state.
+                // compact_members is a comma-separated list stored as a String.
+                // We iterate by scanning for provider_state within the list.
+                if string_contains_state(&env, &pol.compact_members, &provider_state) {
+                    // Verify provider has a valid license in their home state.
+                    let provider_home_key =
+                        DataKey::LicenseRegistry(provider_id.clone(), provider_state.clone());
+                    let provider_home: Option<ProviderLicense> =
+                        env.storage().persistent().get(&provider_home_key);
+                    if let Some(lic) = provider_home {
+                        if lic.active && (lic.valid_until == 0 || lic.valid_until > now) {
+                            return Ok(EligibilityResult {
+                                is_eligible: true,
+                                reason: String::from_str(&env, "Compact interstate license"),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(EligibilityResult {
+            is_eligible: false,
+            reason: String::from_str(&env, "No valid license for patient jurisdiction"),
+        })
+    }
+
+    /// Register or update a provider's license for a jurisdiction.
+    /// Only the provider themselves may register their own license.
+    pub fn register_provider_license(
+        env: Env,
+        provider_id: Address,
+        jurisdiction: String,
+        license_number: String,
+        valid_until: u64,
+    ) -> Result<(), Error> {
+        provider_id.require_auth();
+
+        let license = ProviderLicense {
+            provider_id: provider_id.clone(),
+            jurisdiction: jurisdiction.clone(),
+            license_number,
+            valid_until,
+            active: true,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::LicenseRegistry(provider_id, jurisdiction), &license);
+        Ok(())
+    }
+
+    /// Set jurisdiction policy (compact membership). Callable by any authorized admin.
+    pub fn set_jurisdiction_policy(
+        env: Env,
+        admin: Address,
+        jurisdiction: String,
+        allows_compact: bool,
+        compact_members: String,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+
+        let policy = JurisdictionPolicy {
+            jurisdiction: jurisdiction.clone(),
+            allows_compact,
+            compact_members,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::JurisdictionPolicy(jurisdiction), &policy);
+        Ok(())
     }
 
     pub fn record_technical_issue(
@@ -334,4 +445,55 @@ fn compute_session_token(
 
 fn hash_token(env: &Env, token: &BytesN<32>) -> BytesN<32> {
     env.crypto().sha256(&token.clone().to_xdr(env)).into()
+}
+
+/// Check whether `state` appears as a comma-separated token inside `list`.
+/// Both are Soroban `String`s; we compare byte-by-byte via XDR encoding.
+fn string_contains_state(env: &Env, list: &String, state: &String) -> bool {
+    let list_bytes = list.clone().to_xdr(env);
+    let state_bytes = state.clone().to_xdr(env);
+
+    // XDR String: 4-byte big-endian content length, then content bytes, then 0-3 padding.
+    if list_bytes.len() < 4 || state_bytes.len() < 4 {
+        return false;
+    }
+
+    // Read content lengths from XDR prefix.
+    let lc = ((list_bytes.get(0).unwrap_or(0) as u32) << 24
+        | (list_bytes.get(1).unwrap_or(0) as u32) << 16
+        | (list_bytes.get(2).unwrap_or(0) as u32) << 8
+        | (list_bytes.get(3).unwrap_or(0) as u32)) as usize;
+
+    let sc = ((state_bytes.get(0).unwrap_or(0) as u32) << 24
+        | (state_bytes.get(1).unwrap_or(0) as u32) << 16
+        | (state_bytes.get(2).unwrap_or(0) as u32) << 8
+        | (state_bytes.get(3).unwrap_or(0) as u32)) as usize;
+
+    if sc == 0 || sc > lc {
+        return false;
+    }
+
+    // Slide a window of size `sc` over the list content (offset 4 in XDR bytes).
+    let mut i: usize = 0;
+    while i + sc <= lc {
+        let mut matched = true;
+        for j in 0..sc {
+            let lb = list_bytes.get((4 + i + j) as u32).unwrap_or(0);
+            let sb = state_bytes.get((4 + j) as u32).unwrap_or(1);
+            if lb != sb {
+                matched = false;
+                break;
+            }
+        }
+        if matched {
+            let before_ok = i == 0 || list_bytes.get((4 + i - 1) as u32).unwrap_or(0) == b',';
+            let after_ok = (i + sc) == lc
+                || list_bytes.get((4 + i + sc) as u32).unwrap_or(0) == b',';
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
 }

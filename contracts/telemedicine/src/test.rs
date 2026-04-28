@@ -34,6 +34,14 @@ fn test_telemedicine_lifecycle() {
     );
     assert_eq!(visit_id, 1);
 
+    // Register provider license in NY so eligibility passes.
+    client.register_provider_license(
+        &provider_id,
+        &String::from_str(&env, "NY"),
+        &String::from_str(&env, "LIC-NY-001"),
+        &0_u64,
+    );
+
     // 2. Verify Eligibility
     let eligibility = client.verify_telemedicine_eligibility(
         &patient_id,
@@ -49,6 +57,7 @@ fn test_telemedicine_lifecycle() {
         &visit_id,
         &provider_id,
         &session_start_time,
+        &String::from_str(&env, "NY"),
         &String::from_str(&env, "NY"),
     );
     assert_ne!(token, BytesN::from_array(&env, &[0; 32]));
@@ -137,6 +146,7 @@ fn test_auth_and_eligibility_failures() {
         &wrong_provider,
         &1700000010,
         &String::from_str(&env, "NY"),
+        &String::from_str(&env, "NY"),
     );
     assert!(res.is_err());
 
@@ -169,6 +179,14 @@ fn test_session_tokens_are_unique_bound_expiring_and_non_replayable() {
         li.timestamp = 1_700_000_000;
     });
 
+    // Register provider license in NY so eligibility passes.
+    client.register_provider_license(
+        &provider_id,
+        &String::from_str(&env, "NY"),
+        &String::from_str(&env, "LIC-NY-001"),
+        &0_u64,
+    );
+
     let visit_one = client.schedule_virtual_visit(
         &patient_id,
         &provider_id,
@@ -193,11 +211,13 @@ fn test_session_tokens_are_unique_bound_expiring_and_non_replayable() {
         &provider_id,
         &1_700_000_100,
         &String::from_str(&env, "NY"),
+        &String::from_str(&env, "NY"),
     );
     let token_two = client.start_virtual_session(
         &visit_two,
         &provider_id,
         &1_700_000_200,
+        &String::from_str(&env, "NY"),
         &String::from_str(&env, "NY"),
     );
     assert_ne!(token_one, token_two);
