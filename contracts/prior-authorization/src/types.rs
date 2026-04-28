@@ -16,6 +16,13 @@ pub enum Error {
     AuthorizationExpired = 10,
     ExceedsApprovedUnits = 11,
     PeerToPeerAlreadyScheduled = 12,
+    ReviewerNotAuthorized = 13,
+    SLAViolation = 14,
+    ReviewerNotFound = 15,
+    InvalidReviewerRole = 16,
+    DeadlineExceeded = 17,
+    AutoApprovalFailed = 18,
+    ReviewNotFound = 19,
 }
 
 /// Lifecycle status of a prior authorization request.
@@ -40,7 +47,7 @@ pub enum AuthStatus {
     Expired,
 }
 
-/// Core authorization request record.
+/// Authorization request with SLA tracking
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AuthorizationRequest {
@@ -63,6 +70,10 @@ pub struct AuthorizationRequest {
     pub submitted_at: u64,
     pub decision_date: Option<u64>,
     pub expedited: bool,
+    pub reviewer_id: Option<Address>,
+    pub reviewer_role: Option<Symbol>,
+    pub sla_deadline: u64,
+    pub auto_review_eligible: bool,
 }
 
 /// Summary view returned by get_authorization_status.
@@ -106,6 +117,20 @@ pub struct PeerToPeerRequest {
     pub medical_director: Option<Address>,
 }
 
+/// A recorded review decision for an authorization request.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewRecord {
+    pub review_id: u64,
+    pub auth_request_id: u64,
+    pub reviewer_id: Address,
+    pub decision: Symbol,
+    pub review_notes_hash: BytesN<32>,
+    pub prior_review_hash: Option<BytesN<32>>,
+    pub review_entry_hash: BytesN<32>,
+    pub timestamp: u64,
+}
+
 /// An appeal against a denied authorization.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -117,6 +142,10 @@ pub struct Appeal {
     pub appeal_reason_hash: BytesN<32>,
     pub additional_evidence_hash: Option<BytesN<32>>,
     pub submitted_at: u64,
+    pub previous_appeal_id: Option<u64>,
+    pub previous_appeal_hash: Option<BytesN<32>>,
+    pub ruling_dependency_hash: BytesN<32>,
+    pub appeal_chain_hash: BytesN<32>,
 }
 
 /// An extension request for an existing authorization.
@@ -141,6 +170,45 @@ pub struct UsageRecord {
     pub recorded_at: u64,
 }
 
+/// Reviewer registry entry for authorization validation
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Reviewer {
+    pub reviewer_id: Address,
+    pub insurer_id: Address,
+    pub role: Symbol, // medical_director, case_manager, specialist, reviewer
+    pub specialties: Vec<Symbol>,
+    pub max_cases: u32,
+    pub current_cases: u32,
+    pub authorized_at: u64,
+    pub expires_at: Option<u64>,
+    pub is_active: bool,
+}
+
+/// SLA configuration for different urgency levels
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SLAConfig {
+    pub urgency: Symbol,
+    pub standard_deadline_hours: u64,
+    pub expedited_deadline_hours: u64,
+    pub auto_approval_threshold: u32, // days
+    pub requires_medical_director: bool,
+}
+
+/// Reviewer statistics for workload monitoring
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReviewerStats {
+    pub reviewer_id: Address,
+    pub role: Symbol,
+    pub current_cases: u32,
+    pub max_cases: u32,
+    pub utilization_ratio: f64,
+    pub is_active: bool,
+    pub expires_at: Option<u64>,
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
@@ -148,6 +216,8 @@ pub enum DataKey {
     AuthCounter,
     /// Auto-increment counter for appeals.
     AppealCounter,
+    /// Auto-increment counter for reviews.
+    ReviewCounter,
     /// auth_request_id -> AuthorizationRequest
     AuthRequest(u64),
     /// auth_request_id -> Vec<SupportingDocument>
@@ -158,6 +228,10 @@ pub enum DataKey {
     Appeals(u64),
     /// appeal_id -> Appeal
     Appeal(u64),
+    /// auth_request_id -> Vec<ReviewRecord>
+    ReviewHistory(u64),
+    /// review_id -> ReviewRecord
+    Review(u64),
     /// auth_request_id -> ExtensionRequest
     Extension(u64),
     /// auth_request_id -> Vec<UsageRecord>
@@ -166,4 +240,12 @@ pub enum DataKey {
     ProviderAuths(Address),
     /// patient_id -> Vec<u64> (auth request ids)
     PatientAuths(Address),
+    /// reviewer_id -> Reviewer
+    Reviewer(Address),
+    /// insurer_id -> Vec<Address> (reviewer ids)
+    InsurerReviewers(Address),
+    /// urgency -> SLAConfig
+    SLAConfig(Symbol),
+    /// SLA tracking
+    OverdueAuths(Vec<u64>),
 }

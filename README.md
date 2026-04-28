@@ -22,15 +22,47 @@ This decentralized healthcare system leverages Stellar's Soroban smart contracts
 
 ### Smart Contracts
 
-The system consists of multiple interconnected Soroban smart contracts:
+The system is organised as a Cargo workspace. Each contract lives in its own crate under `contracts/`:
 
-- `patient_registry.rs` - Patient identity and profile management
-- `provider_registry.rs` - Healthcare provider credentials and verification
-- `health_records.rs` - Electronic health record storage and access control
-- `appointments.rs` - Appointment scheduling and management
-- `prescriptions.rs` - Digital prescription issuance and pharmacy verification
-- `insurance_claims.rs` - Automated claims processing and settlement
-- `consent_manager.rs` - Patient consent and data sharing permissions
+| Crate | Description |
+|---|---|
+| `contracts/patient-registry` | Patient identity and profile management |
+| `contracts/provider-registry` | Healthcare provider credentials and verification |
+| `contracts/health-records` | Electronic health record storage and access control |
+| `contracts/doctor-registry` | Doctor registration and credential management |
+| `contracts/hospital-registry` | Hospital registration and configuration |
+| `contracts/insurer-registry` | Insurance provider registry |
+| `contracts/prescription-management` | Digital prescription issuance and pharmacy verification |
+| `contracts/medical-claims` | Automated claims processing and settlement |
+| `contracts/access-control` | Patient consent and data-sharing permissions |
+| `contracts/allergy-management` | Allergy record management |
+| `contracts/allergy-tracking` | Real-time allergy tracking and alerting |
+| `contracts/care-plan` | Patient care-plan management |
+| `contracts/clinical-guideline` | Clinical guideline publication |
+| `contracts/clinical-trial` | Clinical trial enrollment and tracking |
+| `contracts/dental-records` | Dental record storage |
+| `contracts/emergency-medical-info` | Emergency medical information registry |
+| `contracts/financial-records` | Patient financial and billing records |
+| `contracts/hai-tracking` | Hospital-acquired infection tracking |
+| `contracts/healthcare-analytics` | On-chain analytics aggregation |
+| `contracts/healthcare-credentialing` | Provider credentialing workflows |
+| `contracts/hospital-discharge-management` | Discharge planning and management |
+| `contracts/imaging-radiology` | Medical imaging and radiology record management |
+| `contracts/immunization-registry` | Immunization records |
+| `contracts/lab-management` | Lab test ordering and result management |
+| `contracts/medical-device-tracking` | Medical device inventory and tracking |
+| `contracts/mental-health` | Mental health record management |
+| `contracts/multisig-governance` | Multi-signature governance for admin actions |
+| `contracts/nutrition-care-management` | Nutrition and dietary care management |
+| `contracts/pacs-integration` | PACS system integration |
+| `contracts/patient-vitals` | Patient vital-signs tracking |
+| `contracts/prenatal-pediatric` | Prenatal and pediatric care records |
+| `contracts/prior-authorization` | Insurance prior-authorization workflows |
+| `contracts/referral` | Patient referral management |
+| `contracts/rehabilitation-services` | Rehabilitation program tracking |
+| `contracts/telemedicine` | Telemedicine session management |
+| `contracts/upgrade-governance` | Contract upgrade governance |
+| `contracts/zk-eligibility-verifier` | Zero-knowledge eligibility verification |
 
 ### Technology Stack
 
@@ -65,8 +97,14 @@ cargo install --locked stellar-cli
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/stellar-healthcare-system.git
-cd stellar-healthcare-system
+git clone https://github.com/KingFRANKHOOD/contracts.git
+cd contracts
+```
+
+Or via SSH:
+```bash
+git clone git@github.com:KingFRANKHOOD/contracts.git
+cd contracts
 ```
 
 2. Install dependencies:

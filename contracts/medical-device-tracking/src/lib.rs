@@ -15,9 +15,21 @@ pub struct MedicalDeviceRegistry;
 
 #[contractimpl]
 impl MedicalDeviceRegistry {
+    /// Configure the regulator address allowed to issue emergency recalls.
+    pub fn initialize(env: Env, regulator: Address) -> Result<(), Error> {
+        if env.storage().instance().has(&DataKey::Regulator) {
+            return Err(Error::AlreadyInitialized);
+        }
+
+        regulator.require_auth();
+        env.storage().instance().set(&DataKey::Regulator, &regulator);
+        Ok(())
+    }
+
     /// Register a medical device with its Unique Device Identifier (UDI).
     pub fn register_device(
         env: Env,
+        manufacturer_id: Address,
         device_udi: String,
         device_type: Symbol,
         manufacturer: String,
@@ -27,6 +39,8 @@ impl MedicalDeviceRegistry {
         expiration_date: Option<u64>,
         device_specs_hash: BytesN<32>,
     ) -> Result<u64, Error> {
+        manufacturer_id.require_auth();
+
         let count: u64 = env
             .storage()
             .instance()
@@ -41,6 +55,7 @@ impl MedicalDeviceRegistry {
             device_id: new_id,
             device_udi,
             device_type,
+            manufacturer_id,
             manufacturer,
             model_number,
             lot_number,
@@ -223,6 +238,11 @@ impl MedicalDeviceRegistry {
     ) -> Result<u64, Error> {
         manufacturer.require_auth();
 
+        if device_ids.is_empty() {
+            return Err(Error::InvalidInput);
+        }
+        Self::assert_manufacturer_controls_devices(&env, &manufacturer, &device_ids)?;
+
         let count: u64 = env
             .storage()
             .instance()
@@ -236,11 +256,89 @@ impl MedicalDeviceRegistry {
         let recall = RecallInfo {
             recall_id: new_id,
             device_ids: device_ids.clone(),
+            issuer: manufacturer,
+            issuer_role: Symbol::new(&env, "maker"),
             recall_reason,
             severity,
             recall_date,
             action_required,
             resolution_deadline: None,
+            emergency_scope: None,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::RecallInfo(new_id), &recall);
+
+        for device_id in device_ids {
+            let mut device_recalls: Vec<u64> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::DeviceRecalls(device_id))
+                .unwrap_or(Vec::new(&env));
+            device_recalls.push_back(new_id);
+            env.storage()
+                .persistent()
+                .set(&DataKey::DeviceRecalls(device_id), &device_recalls);
+        }
+
+        Ok(new_id)
+    }
+
+    /// Issue an emergency recall under regulator authority for a defined scope.
+    pub fn issue_regulator_recall(
+        env: Env,
+        regulator: Address,
+        device_ids: Vec<u64>,
+        recall_reason: String,
+        severity: Symbol,
+        recall_date: u64,
+        action_required: String,
+        emergency_scope: String,
+    ) -> Result<u64, Error> {
+        regulator.require_auth();
+
+        if device_ids.is_empty() || emergency_scope.is_empty() {
+            return Err(Error::InvalidInput);
+        }
+
+        let configured_regulator: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Regulator)
+            .ok_or(Error::NotAuthorized)?;
+        if regulator != configured_regulator {
+            return Err(Error::NotAuthorized);
+        }
+
+        for device_id in device_ids.iter() {
+            if !env
+                .storage()
+                .persistent()
+                .has(&DataKey::DeviceRecord(device_id))
+            {
+                return Err(Error::RecordNotFound);
+            }
+        }
+
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::RecallCounter)
+            .unwrap_or(0);
+        let new_id = count + 1;
+        env.storage().instance().set(&DataKey::RecallCounter, &new_id);
+
+        let recall = RecallInfo {
+            recall_id: new_id,
+            device_ids: device_ids.clone(),
+            issuer: regulator,
+            issuer_role: Symbol::new(&env, "reg"),
+            recall_reason,
+            severity,
+            recall_date,
+            action_required,
+            resolution_deadline: None,
+            emergency_scope: Some(emergency_scope),
         };
         env.storage()
             .persistent()
@@ -421,5 +519,24 @@ impl MedicalDeviceRegistry {
         }
 
         Ok(recalls)
+    }
+
+    fn assert_manufacturer_controls_devices(
+        env: &Env,
+        manufacturer: &Address,
+        device_ids: &Vec<u64>,
+    ) -> Result<(), Error> {
+        for device_id in device_ids.iter() {
+            let device: DeviceRecord = env
+                .storage()
+                .persistent()
+                .get(&DataKey::DeviceRecord(device_id))
+                .ok_or(Error::RecordNotFound)?;
+            if device.manufacturer_id != *manufacturer {
+                return Err(Error::NotAuthorized);
+            }
+        }
+
+        Ok(())
     }
 }

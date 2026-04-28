@@ -10,6 +10,9 @@ pub enum Error {
     AlreadyExists = 4,
     AccessExpired = 5,
     ReportAlreadyExists = 6,
+    GrantRevoked = 7,
+    TimestampOutOfBounds = 8,
+    NonMonotonicViewTimestamp = 9,
 }
 
 #[contracttype]
@@ -22,6 +25,8 @@ pub enum DataKey {
     AccessList(u64),
     PatientStudies(Address),
     ViewLog(u64),
+    ViewerLastViewTs(u64, Address),
+    ViewerViewChainHead(u64, Address),
     QcReview(u64),
     AnonymizedStudy(u64),
     CdRecord(u64),
@@ -72,16 +77,22 @@ pub struct ImagingReport {
 pub struct AccessGrant {
     pub viewer_id: Address,
     pub access_type: Symbol,
+    pub purpose: String,
     pub granted_at: u64,
     pub expires_at: Option<u64>,
+    pub revoked_at: Option<u64>,
 }
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ViewRecord {
     pub viewer_id: Address,
+    pub purpose: String,
     pub view_timestamp: u64,
     pub view_duration: u32,
+    pub recorded_at: u64,
+    pub previous_entry_hash: Option<BytesN<32>>,
+    pub entry_hash: BytesN<32>,
 }
 
 #[contracttype]

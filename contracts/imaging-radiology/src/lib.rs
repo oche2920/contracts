@@ -393,57 +393,136 @@ impl ImagingRadiology {
     }
 
     /// Get imaging order details
-    pub fn get_imaging_order(env: Env, order_id: u64) -> Option<ImagingOrder> {
+    pub fn get_imaging_order(
+        env: Env,
+        order_id: u64,
+        requester: Address,
+    ) -> Result<Option<ImagingOrder>, Error> {
         let key = DataKey::ImagingOrder(order_id);
-        env.storage().persistent().get(&key)
+        let order = env.storage().persistent().get::<_, ImagingOrder>(&key);
+        if let Some(ref existing) = order {
+            Self::require_order_read_access(&env, existing, &requester)?;
+        } else {
+            requester.require_auth();
+        }
+        Ok(order)
     }
 
     /// Get imaging schedule
-    pub fn get_imaging_schedule(env: Env, order_id: u64) -> Option<ImagingSchedule> {
+    pub fn get_imaging_schedule(
+        env: Env,
+        order_id: u64,
+        requester: Address,
+    ) -> Result<Option<ImagingSchedule>, Error> {
+        Self::load_order_for_read(&env, order_id, &requester)?;
         let key = DataKey::ImagingSchedule(order_id);
-        env.storage().persistent().get(&key)
+        Ok(env.storage().persistent().get(&key))
     }
 
     /// Get DICOM images reference
-    pub fn get_dicom_images(env: Env, order_id: u64) -> Option<DicomImages> {
+    pub fn get_dicom_images(
+        env: Env,
+        order_id: u64,
+        requester: Address,
+    ) -> Result<Option<DicomImages>, Error> {
+        Self::load_order_for_read(&env, order_id, &requester)?;
         let key = DataKey::DicomImages(order_id);
-        env.storage().persistent().get(&key)
+        Ok(env.storage().persistent().get(&key))
     }
 
     /// Get preliminary report
-    pub fn get_preliminary_report(env: Env, order_id: u64) -> Option<PreliminaryReport> {
+    pub fn get_preliminary_report(
+        env: Env,
+        order_id: u64,
+        requester: Address,
+    ) -> Result<Option<PreliminaryReport>, Error> {
+        Self::load_order_for_read(&env, order_id, &requester)?;
         let key = DataKey::PreliminaryReport(order_id);
-        env.storage().persistent().get(&key)
+        Ok(env.storage().persistent().get(&key))
     }
 
     /// Get final report
-    pub fn get_final_report(env: Env, order_id: u64) -> Option<FinalReport> {
+    pub fn get_final_report(
+        env: Env,
+        order_id: u64,
+        requester: Address,
+    ) -> Result<Option<FinalReport>, Error> {
+        Self::load_order_for_read(&env, order_id, &requester)?;
         let key = DataKey::FinalReport(order_id);
-        env.storage().persistent().get(&key)
+        Ok(env.storage().persistent().get(&key))
     }
 
     /// Get peer review request
-    pub fn get_peer_review(env: Env, order_id: u64) -> Option<PeerReview> {
+    pub fn get_peer_review(
+        env: Env,
+        order_id: u64,
+        requester: Address,
+    ) -> Result<Option<PeerReview>, Error> {
+        Self::load_order_for_read(&env, order_id, &requester)?;
         let key = DataKey::PeerReview(order_id);
-        env.storage().persistent().get(&key)
+        Ok(env.storage().persistent().get(&key))
     }
 
     /// Get all orders for a patient
-    pub fn get_patient_orders(env: Env, patient_id: Address) -> Vec<u64> {
+    pub fn get_patient_orders(
+        env: Env,
+        patient_id: Address,
+        requester: Address,
+    ) -> Result<Vec<u64>, Error> {
+        requester.require_auth();
+        if requester != patient_id {
+            return Err(Error::UnauthorizedAccess);
+        }
         let key = DataKey::PatientOrders(patient_id);
-        env.storage()
+        Ok(env
+            .storage()
             .persistent()
             .get(&key)
-            .unwrap_or(Vec::new(&env))
+            .unwrap_or(Vec::new(&env)))
     }
 
     /// Get all orders by a provider
-    pub fn get_provider_orders(env: Env, provider_id: Address) -> Vec<u64> {
+    pub fn get_provider_orders(
+        env: Env,
+        provider_id: Address,
+        requester: Address,
+    ) -> Result<Vec<u64>, Error> {
+        requester.require_auth();
+        if requester != provider_id {
+            return Err(Error::UnauthorizedAccess);
+        }
         let key = DataKey::ProviderOrders(provider_id);
-        env.storage()
+        Ok(env
+            .storage()
             .persistent()
             .get(&key)
-            .unwrap_or(Vec::new(&env))
+            .unwrap_or(Vec::new(&env)))
+    }
+
+    fn load_order_for_read(
+        env: &Env,
+        order_id: u64,
+        requester: &Address,
+    ) -> Result<ImagingOrder, Error> {
+        let order: ImagingOrder = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ImagingOrder(order_id))
+            .ok_or(Error::OrderNotFound)?;
+        Self::require_order_read_access(env, &order, requester)?;
+        Ok(order)
+    }
+
+    fn require_order_read_access(
+        _env: &Env,
+        order: &ImagingOrder,
+        requester: &Address,
+    ) -> Result<(), Error> {
+        requester.require_auth();
+        if *requester == order.patient_id || *requester == order.provider_id {
+            return Ok(());
+        }
+        Err(Error::UnauthorizedAccess)
     }
 }
 

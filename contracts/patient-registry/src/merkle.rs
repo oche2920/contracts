@@ -11,7 +11,7 @@
 //!
 //! Odd-length layers: the dangling node is paired with itself.
 
-use soroban_sdk::{Bytes, BytesN, Env, Vec};
+use soroban_sdk::{panic_with_error, Bytes, BytesN, Env, Vec};
 
 const LEAF_TAG: u8 = 0x00;
 const NODE_TAG: u8 = 0x01;
@@ -72,20 +72,20 @@ pub fn compute_merkle_root(env: &Env, record_ids: &Vec<u64>) -> BytesN<32> {
         while i + 1 < len {
             next.push_back(hash_pair(
                 env,
-                layer.get(i).unwrap(),
-                layer.get(i + 1).unwrap(),
+                layer.get(i).unwrap_or_else(|| panic_with_error!(env, crate::ContractError::NotFound)),
+                layer.get(i + 1).unwrap_or_else(|| panic_with_error!(env, crate::ContractError::NotFound)),
             ));
             i += 2;
         }
         // Odd node: pair with itself
         if len % 2 == 1 {
-            let last = layer.get(len - 1).unwrap();
+            let last = layer.get(len - 1).unwrap_or_else(|| panic_with_error!(env, crate::ContractError::NotFound));
             next.push_back(hash_pair(env, last.clone(), last));
         }
         layer = next;
     }
 
-    layer.get(0).unwrap()
+    layer.get(0).unwrap_or_else(|| panic_with_error!(env, crate::ContractError::NotFound))
 }
 
 // ─── membership verification ───────────────────────────────────────────────

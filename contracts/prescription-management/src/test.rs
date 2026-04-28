@@ -8,6 +8,9 @@ use soroban_sdk::{
     vec,
 };
 
+#[path = "test_enhanced.rs"]
+mod test_enhanced;
+
 #[test]
 fn test_prescription_lifecycle() {
     let env = Env::default();
@@ -33,22 +36,31 @@ fn test_prescription_lifecycle() {
         schedule: None,
         valid_until: 1000,
         substitution_allowed: true,
+        pharmacy_id: Some(pharmacy.clone()),
     };
 
     let prescription_id = client.issue_prescription(&provider, &patient, &request);
     assert_eq!(prescription_id, 0);
 
     // Test Dispensing
-    client.dispense_prescription(
-        &prescription_id,
-        &pharmacy,
-        &30,
-        &String::from_str(&env, "LOT123"),
-    );
+    let dispense = DispenseRequest {
+        prescription_id,
+        quantity: 10,
+        lot: String::from_str(&env, "LOT123"),
+        expires_at: 2000,
+        ndc_code: String::from_str(&env, "0501-1234-01"),
+    };
+    client.dispense_prescription(&dispense, &pharmacy);
 
     // Test Transfer
     let new_pharmacy = Address::generate(&env);
-    client.transfer_prescription(&prescription_id, &pharmacy, &new_pharmacy);
+    let transfer = TransferRequest {
+        prescription_id,
+        to_pharmacy: new_pharmacy,
+        transfer_reason: String::from_str(&env, "patient_request"),
+        urgency: Symbol::new(&env, "routine"),
+    };
+    client.transfer_prescription(&transfer, &pharmacy);
 }
 
 #[test]
@@ -76,6 +88,7 @@ fn test_fail_expired_prescription() {
         schedule: None,
         valid_until: 500,
         substitution_allowed: true,
+        pharmacy_id: Some(pharmacy.clone()),
     };
 
     let id = client.issue_prescription(&provider, &patient, &request);
@@ -85,7 +98,14 @@ fn test_fail_expired_prescription() {
         li.timestamp = 501;
     });
 
-    client.dispense_prescription(&id, &pharmacy, &10, &String::from_str(&env, "LOT999"));
+    let dispense = DispenseRequest {
+        prescription_id: id,
+        quantity: 10,
+        lot: String::from_str(&env, "LOT999"),
+        expires_at: 2000,
+        ndc_code: String::from_str(&env, "123"),
+    };
+    client.dispense_prescription(&dispense, &pharmacy);
 }
 
 #[test]
@@ -293,4 +313,113 @@ fn test_invalid_severity_rejected() {
     );
 
     assert_eq!(result, Err(Ok(Error::InvalidSeverity)));
+}
+
+#[test]
+fn test_registry_governance_authorizes_writers_and_blocks_legacy_updates() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PrescriptionContract, ());
+    let client = PrescriptionContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let writer = Address::generate(&env);
+    let outsider = Address::generate(&env);
+    let med = String::from_str(&env, "12345-0001");
+
+    client.initialize_registry_governance(&admin);
+    client.add_registry_writer(&admin, &writer);
+
+    let legacy = client.try_register_medication(
+        &med,
+        &String::from_str(&env, "Governed Drug"),
+        &vec![&env],
+        &Symbol::new(&env, "classg"),
+        &BytesN::from_array(&env, &[9u8; 32]),
+    );
+    assert_eq!(legacy, Err(Ok(Error::RegistryGoverned)));
+
+    let unauthorized = client.try_register_medication_by(
+        &outsider,
+        &med,
+        &String::from_str(&env, "Governed Drug"),
+        &vec![&env],
+        &Symbol::new(&env, "classg"),
+        &BytesN::from_array(&env, &[9u8; 32]),
+    );
+    assert_eq!(unauthorized, Err(Ok(Error::Unauthorized)));
+
+    client.register_medication_by(
+        &writer,
+        &med,
+        &String::from_str(&env, "Governed Drug"),
+        &vec![&env],
+        &Symbol::new(&env, "classg"),
+        &BytesN::from_array(&env, &[9u8; 32]),
+    );
+}
+
+#[test]
+fn test_high_impact_interaction_requires_proposal_and_snapshot_is_versioned() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(PrescriptionContract, ());
+    let client = PrescriptionContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let writer = Address::generate(&env);
+    let med1 = String::from_str(&env, "55555-1001");
+    let med2 = String::from_str(&env, "55555-1002");
+
+    client.initialize_registry_governance(&admin);
+    client.add_registry_writer(&admin, &writer);
+    client.register_medication_by(
+        &writer,
+        &med1,
+        &String::from_str(&env, "Drug One"),
+        &vec![&env],
+        &Symbol::new(&env, "classa"),
+        &BytesN::from_array(&env, &[1u8; 32]),
+    );
+    client.register_medication_by(
+        &writer,
+        &med2,
+        &String::from_str(&env, "Drug Two"),
+        &vec![&env],
+        &Symbol::new(&env, "classb"),
+        &BytesN::from_array(&env, &[2u8; 32]),
+    );
+
+    let direct = client.try_add_interaction_by(
+        &writer,
+        &med1,
+        &med2,
+        &Symbol::new(&env, "major"),
+        &Symbol::new(&env, "pk"),
+        &String::from_str(&env, "High impact interaction"),
+        &String::from_str(&env, "Admin approval required"),
+    );
+    assert_eq!(direct, Err(Ok(Error::HighImpactRequiresProposal)));
+
+    let proposal_id = client.propose_interaction_update(
+        &writer,
+        &med1,
+        &med2,
+        &Symbol::new(&env, "major"),
+        &Symbol::new(&env, "pk"),
+        &String::from_str(&env, "High impact interaction"),
+        &String::from_str(&env, "Admin approval required"),
+    );
+    client.approve_registry_proposal(&admin, &proposal_id);
+
+    let snapshot_version = client.create_catalog_snapshot(&admin);
+    let snapshot = client.get_catalog_snapshot(&snapshot_version);
+    assert_eq!(snapshot.version, 1);
+    assert_eq!(snapshot.medication_count, 2);
+    assert_eq!(snapshot.interaction_count, 1);
+
+    let duplicate_approval = client.try_approve_registry_proposal(&admin, &proposal_id);
+    assert_eq!(duplicate_approval, Err(Ok(Error::ProposalAlreadyFinalized)));
 }

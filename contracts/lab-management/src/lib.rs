@@ -87,7 +87,7 @@ impl LabManagementContract {
             .storage()
             .persistent()
             .get(&order_id)
-            .expect("Order not found");
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotFound));
         order.lab_id = Some(lab_id);
         order.status = Symbol::new(&env, "Assigned");
         env.storage().persistent().set(&order_id, &order);
@@ -102,7 +102,11 @@ impl LabManagementContract {
         qc_passed: bool,
     ) {
         lab_id.require_auth();
-        let mut order: LabOrder = env.storage().persistent().get(&order_id).expect("No Order");
+        let mut order: LabOrder = env
+            .storage()
+            .persistent()
+            .get(&order_id)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::NotFound));
 
         if !qc_passed {
             panic_with_error!(&env, Error::QCFieldFailed);

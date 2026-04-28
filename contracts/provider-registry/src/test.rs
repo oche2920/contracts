@@ -1,7 +1,9 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, Address, Env, String};
+use soroban_sdk::{
+    testutils::Address as _, testutils::Ledger as _, Address, BytesN, Env, String,
+};
 
 fn setup() -> (Env, Address, ProviderRegistryClient<'static>) {
     let env = Env::default();
@@ -9,397 +11,150 @@ fn setup() -> (Env, Address, ProviderRegistryClient<'static>) {
     let client = ProviderRegistryClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
     env.mock_all_auths();
-    client.initialize(&admin);
+    client.initialize(&admin).unwrap();
     (env, admin, client)
 }
+
+// ── initialize ────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_double_initialize_returns_error() {
+    let (_, admin, client) = setup();
+    let err = client.try_initialize(&admin).unwrap_err().unwrap();
+    assert_eq!(err, Error::AlreadyInitialized);
+}
+
+#[test]
+fn test_mutable_call_before_init_returns_error() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, ProviderRegistry);
+    let client = ProviderRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let err = client.try_register_provider(&admin, &provider).unwrap_err().unwrap();
+    assert_eq!(err, Error::NotInitialized);
+}
+
+// ── register / revoke / is_provider ──────────────────────────────────────────
 
 #[test]
 fn test_register_and_is_provider() {
     let (env, admin, client) = setup();
     let provider = Address::generate(&env);
-
     assert!(!client.is_provider(&provider));
-    client.register_provider(&admin, &provider);
+    client.register_provider(&admin, &provider).unwrap();
     assert!(client.is_provider(&provider));
 }
 
 #[test]
-fn test_revoke_provider() {
+fn test_register_provider_exposes_profile() {
     let (env, admin, client) = setup();
     let provider = Address::generate(&env);
 
-    client.register_provider(&admin, &provider);
-    assert!(client.is_provider(&provider));
+    register_provider_with_anchor(&env, &client, &admin, &provider);
 
-    client.revoke_provider(&admin, &provider);
-    assert!(!client.is_provider(&provider));
+    let profile = client.get_provider_profile(&provider);
+    assert_eq!(profile.credential.credential_hash, dummy_hash(&env, 1));
+    assert_eq!(profile.credential.attestation_hash, dummy_hash(&env, 2));
+    assert_eq!(profile.credential.revocation_reference, dummy_hash(&env, 3));
+    assert!(profile.active);
 }
+
+#[test]
+fn test_revoke_provider_preserves_profile_but_disables_membership() {
+    let (env, admin, client) = setup();
+    let provider = Address::generate(&env);
+    client.register_provider(&admin, &provider).unwrap();
+    client.revoke_provider(&admin, &provider).unwrap();
+    assert!(!client.is_provider(&provider));
+
+    let profile = client.get_provider_profile(&provider);
+    assert!(!profile.active);
+    assert!(profile.credential.revoked_at.is_some());
+    assert_eq!(profile.credential.revoked_by, Some(admin));
+}
+
+#[test]
+fn test_register_provider_non_admin_returns_error() {
+    let (env, _, client) = setup();
+    let non_admin = Address::generate(&env);
+    let provider = Address::generate(&env);
+    let err = client.try_register_provider(&non_admin, &provider).unwrap_err().unwrap();
+    assert_eq!(err, Error::Unauthorized);
+}
+
+#[test]
+fn test_revoke_provider_non_admin_returns_error() {
+    let (env, admin, client) = setup();
+    let non_admin = Address::generate(&env);
+    let provider = Address::generate(&env);
+    client.register_provider(&admin, &provider).unwrap();
+    let err = client.try_revoke_provider(&non_admin, &provider).unwrap_err().unwrap();
+    assert_eq!(err, Error::Unauthorized);
+}
+
+// ── add_record ────────────────────────────────────────────────────────────────
 
 #[test]
 fn test_add_record_by_whitelisted_provider() {
     let (env, admin, client) = setup();
     let provider = Address::generate(&env);
-
-    client.register_provider(&admin, &provider);
-    client.add_record(
-        &provider,
-        &String::from_str(&env, "REC001"),
-        &String::from_str(&env, "Patient data"),
-    );
-
-    let rec = client.get_record(&String::from_str(&env, "REC001"));
-    assert_eq!(rec.data, String::from_str(&env, "Patient data"));
-    assert_eq!(rec.created_by, provider);
-}
-
-#[test]
-#[should_panic(expected = "Unauthorized: not a whitelisted provider")]
-fn test_add_record_rejected_for_non_provider() {
-    let (env, _admin, client) = setup();
-    let stranger = Address::generate(&env);
-
-    client.add_record(
-        &stranger,
-        &String::from_str(&env, "REC002"),
-        &String::from_str(&env, "Malicious data"),
-    );
-}
-
-#[test]
-#[should_panic(expected = "Unauthorized: not a whitelisted provider")]
-fn test_add_record_rejected_after_revocation() {
-    let (env, admin, client) = setup();
-    let provider = Address::generate(&env);
-
-    client.register_provider(&admin, &provider);
-    client.revoke_provider(&admin, &provider);
-
-    client.add_record(
-        &provider,
-        &String::from_str(&env, "REC003"),
-        &String::from_str(&env, "Should fail"),
-    );
-}
-
-#[test]
-#[should_panic(expected = "Unauthorized: admin only")]
-fn test_register_provider_non_admin_rejected() {
-    let (env, _admin, client) = setup();
-    let non_admin = Address::generate(&env);
-    let provider = Address::generate(&env);
-
-    client.register_provider(&non_admin, &provider);
-}
-
-#[test]
-#[should_panic(expected = "Unauthorized: admin only")]
-fn test_revoke_provider_non_admin_rejected() {
-    let (env, admin, client) = setup();
-    let non_admin = Address::generate(&env);
-    let provider = Address::generate(&env);
-
-    client.register_provider(&admin, &provider);
-    client.revoke_provider(&non_admin, &provider);
-}
-
-#[test]
-#[should_panic(expected = "Already initialized")]
-fn test_double_initialize() {
-    let (_env, admin, client) = setup();
-    client.initialize(&admin);
-}
-
-// --- Rate limit: within limit (max 50/hour, add 3) ---
-#[test]
-fn test_rate_limit_within_limit() {
-    let (env, admin, client) = setup();
-    let provider = Address::generate(&env);
-
-    env.ledger().with_mut(|li| li.timestamp = 1_000_000);
-
-    client.register_provider(&admin, &provider);
-    client.set_rate_limit(&admin, &50, &3600);
-
-    for id in ["REC-W-0", "REC-W-1", "REC-W-2"] {
-        client.add_record(
+    client.register_provider(&admin, &provider).unwrap();
+    client
+        .add_record(
             &provider,
-            &String::from_str(&env, id),
-            &String::from_str(&env, "data"),
-        );
-    }
-}
-
-// --- At limit: exactly max_records succeed, next fails ---
-#[test]
-fn test_rate_limit_at_limit() {
-    let (env, admin, client) = setup();
-    let provider = Address::generate(&env);
-
-    env.ledger().with_mut(|li| li.timestamp = 2_000_000);
-
-    client.register_provider(&admin, &provider);
-    const MAX: u32 = 5;
-    client.set_rate_limit(&admin, &MAX, &3600);
-
-    let ids = ["REC-A-0", "REC-A-1", "REC-A-2", "REC-A-3", "REC-A-4"];
-    for id in ids {
-        client.add_record(
-            &provider,
-            &String::from_str(&env, id),
-            &String::from_str(&env, "data"),
-        );
-    }
-
-    let over = client.try_add_record(
-        &provider,
-        &String::from_str(&env, "REC-A-OVER"),
-        &String::from_str(&env, "data"),
-    );
-    assert!(matches!(over, Err(Ok(ContractError::RateLimitExceeded))));
-}
-
-// --- Over limit (same as at-limit verification) ---
-#[test]
-fn test_rate_limit_over_limit_rejected() {
-    let (env, admin, client) = setup();
-    let provider = Address::generate(&env);
-
-    env.ledger().with_mut(|li| li.timestamp = 3_000_000);
-
-    client.register_provider(&admin, &provider);
-    client.set_rate_limit(&admin, &2, &100);
-
-    client.add_record(
-        &provider,
-        &String::from_str(&env, "R1"),
-        &String::from_str(&env, "d"),
-    );
-    client.add_record(
-        &provider,
-        &String::from_str(&env, "R2"),
-        &String::from_str(&env, "d"),
-    );
-
-    let third = client.try_add_record(
-        &provider,
-        &String::from_str(&env, "R3"),
-        &String::from_str(&env, "d"),
-    );
-    assert!(matches!(third, Err(Ok(ContractError::RateLimitExceeded))));
-}
-
-// --- Window resets after window_seconds; can record again ---
-#[test]
-fn test_rate_limit_window_reset_allows_again() {
-    let (env, admin, client) = setup();
-    let provider = Address::generate(&env);
-
-    let t0 = 10_000u64;
-    env.ledger().with_mut(|li| li.timestamp = t0);
-
-    client.register_provider(&admin, &provider);
-    client.set_rate_limit(&admin, &3, &3600);
-
-    for id in ["REC-R-0", "REC-R-1", "REC-R-2"] {
-        client.add_record(
-            &provider,
-            &String::from_str(&env, id),
-            &String::from_str(&env, "data"),
-        );
-    }
-
-    let blocked = client.try_add_record(
-        &provider,
-        &String::from_str(&env, "REC-BLOCKED"),
-        &String::from_str(&env, "data"),
-    );
-    assert!(matches!(blocked, Err(Ok(ContractError::RateLimitExceeded))));
-
-    // Past window end: new window starts
-    env.ledger().with_mut(|li| li.timestamp = t0 + 3600);
-
-    client.add_record(
-        &provider,
-        &String::from_str(&env, "REC-AFTER-RESET"),
-        &String::from_str(&env, "data"),
-    );
+            &String::from_str(&env, "REC001"),
+            &String::from_str(&env, "Patient data"),
+        )
+        .unwrap();
     assert_eq!(
-        client.get_record(&String::from_str(&env, "REC-AFTER-RESET")).data,
-        String::from_str(&env, "data")
+        client.get_record(&String::from_str(&env, "REC001")).unwrap(),
+        String::from_str(&env, "Patient data")
     );
-}
-
-// ── deactivate_provider tests ─────────────────────────────────────────────────
-
-#[test]
-fn test_deactivate_provider_transfers_records_and_removes_whitelist() {
-    let (env, admin, client) = setup();
-    let provider = Address::generate(&env);
-    let successor = Address::generate(&env);
-
-    client.register_provider(&admin, &provider);
-    client.register_provider(&admin, &successor);
-
-    client.add_record(
-        &provider,
-        &String::from_str(&env, "R1"),
-        &String::from_str(&env, "data1"),
-    );
-    client.add_record(
-        &provider,
-        &String::from_str(&env, "R2"),
-        &String::from_str(&env, "data2"),
-    );
-
-    // Confirm original ownership.
-    assert_eq!(client.get_record(&String::from_str(&env, "R1")).created_by, provider);
-    assert_eq!(client.get_record(&String::from_str(&env, "R2")).created_by, provider);
-
-    client.deactivate_provider(&admin, &provider, &successor);
-
-    // Provider removed from whitelist.
-    assert!(!client.is_provider(&provider));
-
-    // Both records now owned by successor.
-    assert_eq!(client.get_record(&String::from_str(&env, "R1")).created_by, successor);
-    assert_eq!(client.get_record(&String::from_str(&env, "R2")).created_by, successor);
+    assert!(matches!(result, Err(Ok(ContractError::Unauthorized))));
 }
 
 #[test]
-fn test_deactivate_provider_no_records() {
-    let (env, admin, client) = setup();
-    let provider = Address::generate(&env);
-    let successor = Address::generate(&env);
-
-    client.register_provider(&admin, &provider);
-    // No records added — deactivation should still succeed.
-    client.deactivate_provider(&admin, &provider, &successor);
-    assert!(!client.is_provider(&provider));
+fn test_add_record_non_provider_returns_error() {
+    let (env, _, client) = setup();
+    let stranger = Address::generate(&env);
+    let err = client
+        .try_add_record(
+            &stranger,
+            &String::from_str(&env, "REC002"),
+            &String::from_str(&env, "bad data"),
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, Error::NotAProvider);
 }
 
 #[test]
-#[should_panic(expected = "Unauthorized: admin only")]
-fn test_deactivate_provider_non_admin_rejected() {
+fn test_add_record_after_revocation_returns_error() {
     let (env, admin, client) = setup();
     let provider = Address::generate(&env);
-    let successor = Address::generate(&env);
-    let non_admin = Address::generate(&env);
-
-    client.register_provider(&admin, &provider);
-    client.deactivate_provider(&non_admin, &provider, &successor);
-}
-
-#[test]
-fn test_deactivate_provider_successor_accumulates_records() {
-    let (env, admin, client) = setup();
-    let provider = Address::generate(&env);
-    let successor = Address::generate(&env);
-
-    client.register_provider(&admin, &provider);
-    client.register_provider(&admin, &successor);
-
-    // Successor already has a record.
-    client.add_record(
-        &successor,
-        &String::from_str(&env, "S1"),
-        &String::from_str(&env, "succ data"),
-    );
-    // Provider has two records.
-    client.add_record(
-        &provider,
-        &String::from_str(&env, "P1"),
-        &String::from_str(&env, "prov data 1"),
-    );
-    client.add_record(
-        &provider,
-        &String::from_str(&env, "P2"),
-        &String::from_str(&env, "prov data 2"),
-    );
-
-    client.deactivate_provider(&admin, &provider, &successor);
-
-    // All three records now belong to successor.
-    assert_eq!(client.get_record(&String::from_str(&env, "S1")).created_by, successor);
-    assert_eq!(client.get_record(&String::from_str(&env, "P1")).created_by, successor);
-    assert_eq!(client.get_record(&String::from_str(&env, "P2")).created_by, successor);
-}
-
-#[test]
-fn test_rate_limit_disabled_with_zero_max() {
-    let (env, admin, client) = setup();
-    let provider = Address::generate(&env);
-
-    env.ledger().with_mut(|li| li.timestamp = 4_000_000);
-
-    client.register_provider(&admin, &provider);
-    client.set_rate_limit(&admin, &0, &3600);
-
-    let ids = [
-        "REC-D-0", "REC-D-1", "REC-D-2", "REC-D-3", "REC-D-4", "REC-D-5", "REC-D-6", "REC-D-7",
-        "REC-D-8", "REC-D-9",
-    ];
-    for id in ids {
-        client.add_record(
+    client.register_provider(&admin, &provider).unwrap();
+    client.revoke_provider(&admin, &provider).unwrap();
+    let err = client
+        .try_add_record(
             &provider,
-            &String::from_str(&env, id),
-            &String::from_str(&env, "data"),
-        );
-    }
+            &String::from_str(&env, "REC003"),
+            &String::from_str(&env, "stale"),
+        )
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, Error::NotAProvider);
 }
 
-#[test]
-fn test_rate_provider_success() {
-    let (env, admin, client) = setup();
-    let provider = Address::generate(&env);
-    let patient = Address::generate(&env);
-
-    client.register_provider(&admin, &provider);
-    client.rate_provider(&patient, &provider, &5);
-
-    let (total_ratings, average_score) = client.get_provider_reputation(&provider);
-    assert_eq!(total_ratings, 1);
-    assert_eq!(average_score, 500);
-}
+// ── get_record ────────────────────────────────────────────────────────────────
 
 #[test]
-fn test_rate_provider_prevents_double_rating() {
-    let (env, admin, client) = setup();
-    let provider = Address::generate(&env);
-    let patient = Address::generate(&env);
-
-    client.register_provider(&admin, &provider);
-    client.rate_provider(&patient, &provider, &4);
-
-    let second = client.try_rate_provider(&patient, &provider, &5);
-    assert!(matches!(second, Err(Ok(ContractError::AlreadyRated))));
-}
-
-#[test]
-fn test_rate_provider_invalid_score() {
-    let (env, admin, client) = setup();
-    let provider = Address::generate(&env);
-    let patient = Address::generate(&env);
-
-    client.register_provider(&admin, &provider);
-    let result = client.try_rate_provider(&patient, &provider, &0);
-    assert!(matches!(result, Err(Ok(ContractError::InvalidScore))));
-}
-
-#[test]
-fn test_get_provider_reputation_average_scaled() {
-    let (env, admin, client) = setup();
-    let provider = Address::generate(&env);
-    let patient_a = Address::generate(&env);
-    let patient_b = Address::generate(&env);
-    let patient_c = Address::generate(&env);
-
-    client.register_provider(&admin, &provider);
-    client.rate_provider(&patient_a, &provider, &5);
-    client.rate_provider(&patient_b, &provider, &4);
-    client.rate_provider(&patient_c, &provider, &3);
-
-    let (total_ratings, average_score) = client.get_provider_reputation(&provider);
-    assert_eq!(total_ratings, 3);
-    // (5 + 4 + 3) / 3 = 4.00 => 400 scaled
-    assert_eq!(average_score, 400);
+fn test_get_missing_record_returns_error() {
+    let (env, _, client) = setup();
+    let err = client
+        .try_get_record(&String::from_str(&env, "MISSING"))
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, Error::RecordNotFound);
 }

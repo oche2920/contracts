@@ -8,8 +8,21 @@ fn dummy_hash(env: &Env) -> BytesN<32> {
     BytesN::from_array(env, &[0u8; 32])
 }
 
-fn register_device_helper(env: &Env, client: &MedicalDeviceRegistryClient) -> u64 {
+fn setup_client(env: &Env) -> MedicalDeviceRegistryClient<'_> {
+    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
+    let client = MedicalDeviceRegistryClient::new(env, &contract_id);
+    let regulator = Address::generate(env);
+    client.initialize(&regulator);
+    client
+}
+
+fn register_device_helper(
+    env: &Env,
+    client: &MedicalDeviceRegistryClient,
+    manufacturer_id: &Address,
+) -> u64 {
     client.register_device(
+        manufacturer_id,
         &String::from_str(env, "UDI-12345-ABC"),
         &Symbol::new(env, "IMPLANT"),
         &String::from_str(env, "MedCorp"),
@@ -26,13 +39,13 @@ fn test_register_device() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
+    let manufacturer = Address::generate(&env);
 
-    let id = register_device_helper(&env, &client);
+    let id = register_device_helper(&env, &client, &manufacturer);
     assert_eq!(id, 1);
 
-    let id2 = register_device_helper(&env, &client);
+    let id2 = register_device_helper(&env, &client, &manufacturer);
     assert_eq!(id2, 2);
 }
 
@@ -41,10 +54,11 @@ fn test_register_device_with_expiration() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
+    let manufacturer = Address::generate(&env);
 
     let id = client.register_device(
+        &manufacturer,
         &String::from_str(&env, "UDI-99999-XYZ"),
         &Symbol::new(&env, "DME"),
         &String::from_str(&env, "DeviceMaker"),
@@ -62,13 +76,13 @@ fn test_implant_device() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let patient_id = Address::generate(&env);
     let provider_id = Address::generate(&env);
+    let manufacturer = Address::generate(&env);
 
-    let device_id = register_device_helper(&env, &client);
+    let device_id = register_device_helper(&env, &client, &manufacturer);
 
     let implant_id = client.implant_device(
         &patient_id,
@@ -96,8 +110,7 @@ fn test_implant_device_nonexistent_returns_error() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let patient_id = Address::generate(&env);
     let provider_id = Address::generate(&env);
@@ -118,12 +131,12 @@ fn test_prescribe_dme() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let patient_id = Address::generate(&env);
     let provider_id = Address::generate(&env);
-    let device_id = register_device_helper(&env, &client);
+    let manufacturer = Address::generate(&env);
+    let device_id = register_device_helper(&env, &client, &manufacturer);
 
     let rx_id = client.prescribe_dme(
         &patient_id,
@@ -153,14 +166,14 @@ fn test_record_device_maintenance() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let patient_id = Address::generate(&env);
     let provider_id = Address::generate(&env);
     let technician = Address::generate(&env);
+    let manufacturer = Address::generate(&env);
 
-    let device_id = register_device_helper(&env, &client);
+    let device_id = register_device_helper(&env, &client, &manufacturer);
     let implant_id = client.implant_device(
         &patient_id,
         &device_id,
@@ -215,11 +228,10 @@ fn test_issue_device_recall() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let manufacturer = Address::generate(&env);
-    let device_id = register_device_helper(&env, &client);
+    let device_id = register_device_helper(&env, &client, &manufacturer);
 
     let mut device_ids: Vec<u64> = Vec::new(&env);
     device_ids.push_back(device_id);
@@ -240,15 +252,14 @@ fn test_notify_affected_patients() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let patient1 = Address::generate(&env);
     let patient2 = Address::generate(&env);
     let provider = Address::generate(&env);
     let manufacturer = Address::generate(&env);
 
-    let device_id = register_device_helper(&env, &client);
+    let device_id = register_device_helper(&env, &client, &manufacturer);
 
     client.implant_device(
         &patient1,
@@ -290,15 +301,14 @@ fn test_notify_affected_patients_excludes_removed() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let patient1 = Address::generate(&env);
     let patient2 = Address::generate(&env);
     let provider = Address::generate(&env);
     let manufacturer = Address::generate(&env);
 
-    let device_id = register_device_helper(&env, &client);
+    let device_id = register_device_helper(&env, &client, &manufacturer);
 
     let implant_id1 = client.implant_device(
         &patient1,
@@ -348,8 +358,7 @@ fn test_notify_affected_patients_recall_not_found() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let res = client.try_notify_affected_patients(&999u64, &1750100000u64);
     assert!(res.is_err());
@@ -360,13 +369,13 @@ fn test_remove_implant() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let patient_id = Address::generate(&env);
     let provider_id = Address::generate(&env);
+    let manufacturer = Address::generate(&env);
 
-    let device_id = register_device_helper(&env, &client);
+    let device_id = register_device_helper(&env, &client, &manufacturer);
     let implant_id = client.implant_device(
         &patient_id,
         &device_id,
@@ -400,8 +409,7 @@ fn test_remove_implant_not_found() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let provider_id = Address::generate(&env);
     let res = client.try_remove_implant(
@@ -419,13 +427,13 @@ fn test_remove_implant_already_inactive() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let patient_id = Address::generate(&env);
     let provider_id = Address::generate(&env);
+    let manufacturer = Address::generate(&env);
 
-    let device_id = register_device_helper(&env, &client);
+    let device_id = register_device_helper(&env, &client, &manufacturer);
     let implant_id = client.implant_device(
         &patient_id,
         &device_id,
@@ -459,13 +467,13 @@ fn test_track_device_performance_no_complications() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let patient_id = Address::generate(&env);
     let provider_id = Address::generate(&env);
+    let manufacturer = Address::generate(&env);
 
-    let device_id = register_device_helper(&env, &client);
+    let device_id = register_device_helper(&env, &client, &manufacturer);
     let implant_id = client.implant_device(
         &patient_id,
         &device_id,
@@ -489,13 +497,12 @@ fn test_track_device_performance_with_complications() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let patient_id = Address::generate(&env);
     let provider_id = Address::generate(&env);
-
-    let device_id = register_device_helper(&env, &client);
+    let manufacturer = Address::generate(&env);
+    let device_id = register_device_helper(&env, &client, &manufacturer);
     let implant_id = client.implant_device(
         &patient_id,
         &device_id,
@@ -542,14 +549,14 @@ fn test_get_patient_implants_active_only_filter() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let patient_id = Address::generate(&env);
     let provider_id = Address::generate(&env);
     let requester = Address::generate(&env);
+    let manufacturer = Address::generate(&env);
 
-    let device_id = register_device_helper(&env, &client);
+    let device_id = register_device_helper(&env, &client, &manufacturer);
 
     let implant_id1 = client.implant_device(
         &patient_id,
@@ -588,11 +595,10 @@ fn test_check_device_recalls() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let manufacturer = Address::generate(&env);
-    let device_id = register_device_helper(&env, &client);
+    let device_id = register_device_helper(&env, &client, &manufacturer);
 
     let no_recalls = client.check_device_recalls(&device_id);
     assert_eq!(no_recalls.len(), 0);
@@ -630,9 +636,72 @@ fn test_check_device_recalls_no_results_for_unknown_device() {
     let env = Env::default();
     env.mock_all_auths();
 
-    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
-    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let client = setup_client(&env);
 
     let recalls = client.check_device_recalls(&999u64);
     assert_eq!(recalls.len(), 0);
+}
+
+#[test]
+fn test_recall_rejected_for_unrelated_manufacturer() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client = setup_client(&env);
+    let manufacturer = Address::generate(&env);
+    let spoofing_manufacturer = Address::generate(&env);
+    let device_id = register_device_helper(&env, &client, &manufacturer);
+
+    let mut device_ids: Vec<u64> = Vec::new(&env);
+    device_ids.push_back(device_id);
+
+    let result = client.try_issue_device_recall(
+        &spoofing_manufacturer,
+        &device_ids,
+        &String::from_str(&env, "Spoofed recall"),
+        &Symbol::new(&env, "HIGH"),
+        &1750000000u64,
+        &String::from_str(&env, "Ignore"),
+    );
+    assert_eq!(result, Err(Ok(Error::NotAuthorized)));
+}
+
+#[test]
+fn test_regulator_emergency_recall_records_scope() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, MedicalDeviceRegistry);
+    let client = MedicalDeviceRegistryClient::new(&env, &contract_id);
+    let regulator = Address::generate(&env);
+    client.initialize(&regulator);
+
+    let manufacturer_a = Address::generate(&env);
+    let manufacturer_b = Address::generate(&env);
+    let device_a = register_device_helper(&env, &client, &manufacturer_a);
+    let device_b = register_device_helper(&env, &client, &manufacturer_b);
+
+    let mut device_ids: Vec<u64> = Vec::new(&env);
+    device_ids.push_back(device_a);
+    device_ids.push_back(device_b);
+
+    let recall_id = client.issue_regulator_recall(
+        &regulator,
+        &device_ids,
+        &String::from_str(&env, "Cross-manufacturer safety event"),
+        &Symbol::new(&env, "CRITICAL"),
+        &1750000000u64,
+        &String::from_str(&env, "Immediate quarantine"),
+        &String::from_str(&env, "national-device-hold"),
+    );
+
+    let recalls = client.check_device_recalls(&device_a);
+    let recall = recalls.get(0).unwrap();
+    assert_eq!(recall_id, recall.recall_id);
+    assert_eq!(recall.issuer, regulator);
+    assert_eq!(recall.issuer_role, Symbol::new(&env, "reg"));
+    assert_eq!(
+        recall.emergency_scope,
+        Some(String::from_str(&env, "national-device-hold"))
+    );
 }
