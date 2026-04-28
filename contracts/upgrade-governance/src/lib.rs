@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN,
+    Env, Vec,
 };
 
 mod test;
@@ -31,14 +32,10 @@ pub enum Error {
     Cancelled          = 11,
     /// Caller is not authorised to cancel (must be a signer).
     NotAuthorized      = 12,
-    /// The address is already a signer.
-    AlreadySigner      = 13,
-    /// Removing this signer would make the threshold unreachable.
-    ThresholdBreached  = 14,
-    /// A signer-change proposal already exists.
-    ProposalExists     = 15,
-    /// Proposal was already finalized.
-    AlreadyFinalized   = 16,
+    /// Release metadata does not hash to the declared metadata hash.
+    InvalidReleaseMetadata = 13,
+    /// Release metadata hash is not in the approved artifact registry.
+    UnapprovedArtifactMetadata = 14,
 }
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -50,8 +47,7 @@ pub enum DataKey {
     Threshold,
     NextId,
     Proposal(u64),
-    /// Pending signer-change proposal (only one active at a time).
-    SignerProposal,
+    ApprovedArtifactMetadata(BytesN<32>),
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -70,6 +66,8 @@ pub enum ProposalStatus {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UpgradeProposal {
     pub new_wasm_hash: BytesN<32>,
+    pub release_metadata: ReleaseMetadata,
+    pub artifact_metadata_hash: BytesN<32>,
     pub votes: Vec<Address>,
     pub proposed_at: u64,
     /// Timestamp when the threshold was first reached (starts the timelock).
@@ -82,28 +80,10 @@ pub struct UpgradeProposal {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SignerChangeKind {
-    Add,
-    Remove,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum SignerProposalStatus {
-    Pending,
-    Executed,
-}
-
-/// A threshold-gated proposal to add or remove a signer.
-/// Only one signer-change proposal may be active at a time.
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SignerProposal {
-    pub kind: SignerChangeKind,
-    pub target: Address,
-    pub approvals: Vec<Address>,
-    pub proposed_at: u64,
-    pub status: SignerProposalStatus,
+pub struct ReleaseMetadata {
+    pub version: Bytes,
+    pub audit_digest: BytesN<32>,
+    pub build_manifest: BytesN<32>,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -131,10 +111,17 @@ impl UpgradeGovernance {
         env: Env,
         proposer: Address,
         new_wasm_hash: BytesN<32>,
+        release_metadata: ReleaseMetadata,
+        artifact_metadata_hash: BytesN<32>,
     ) -> Result<u64, Error> {
         Self::assert_initialized(&env)?;
         proposer.require_auth();
         Self::assert_signer(&env, &proposer)?;
+        Self::validate_release_metadata(
+            &env,
+            &release_metadata,
+            &artifact_metadata_hash,
+        )?;
 
         let proposal_id: u64 = env
             .storage()
@@ -149,6 +136,8 @@ impl UpgradeGovernance {
 
         let proposal = UpgradeProposal {
             new_wasm_hash: new_wasm_hash.clone(),
+            release_metadata,
+            artifact_metadata_hash,
             votes,
             proposed_at: env.ledger().timestamp(),
             approved_at: 0,
@@ -167,6 +156,25 @@ impl UpgradeGovernance {
             .publish((symbol_short!("proposed"), proposal_id), new_wasm_hash);
 
         Ok(proposal_id)
+    }
+
+    /// Allow signers to approve a release artifact metadata hash before execution.
+    pub fn approve_artifact_metadata(
+        env: Env,
+        caller: Address,
+        artifact_metadata_hash: BytesN<32>,
+    ) -> Result<(), Error> {
+        Self::assert_initialized(&env)?;
+        caller.require_auth();
+        Self::assert_signer(&env, &caller)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::ApprovedArtifactMetadata(artifact_metadata_hash.clone()), &true);
+        env.events().publish(
+            (symbol_short!("meta_appr"), caller),
+            artifact_metadata_hash,
+        );
+        Ok(())
     }
 
     pub fn vote_upgrade(env: Env, voter: Address, proposal_id: u64) -> Result<(), Error> {
@@ -234,6 +242,21 @@ impl UpgradeGovernance {
         if env.ledger().timestamp() < proposal.approved_at + TIMELOCK_DELAY {
             return Err(Error::TimelockActive);
         }
+        let approved = env
+            .storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::ApprovedArtifactMetadata(
+                proposal.artifact_metadata_hash.clone(),
+            ))
+            .unwrap_or(false);
+        if !approved {
+            return Err(Error::UnapprovedArtifactMetadata);
+        }
+        Self::validate_release_metadata(
+            &env,
+            &proposal.release_metadata,
+            &proposal.artifact_metadata_hash,
+        )?;
 
         proposal.status = ProposalStatus::Executed;
         env.storage()
@@ -456,6 +479,28 @@ impl UpgradeGovernance {
         data.append(&Bytes::from_slice(env, b"upgrade-governance"));
         data.append(&Bytes::from_slice(env, &proposal_id.to_le_bytes()));
         env.crypto().sha256(&data).into()
+    }
+
+    /// Canonical metadata hash = SHA-256("release-metadata-v1" ++ version ++ audit_digest ++ build_manifest)
+    fn compute_artifact_metadata_hash(env: &Env, metadata: &ReleaseMetadata) -> BytesN<32> {
+        let mut data = Bytes::new(env);
+        data.append(&Bytes::from_slice(env, b"release-metadata-v1"));
+        data.append(&metadata.version);
+        data.append(&metadata.audit_digest.clone().into());
+        data.append(&metadata.build_manifest.clone().into());
+        env.crypto().sha256(&data).into()
+    }
+
+    fn validate_release_metadata(
+        env: &Env,
+        metadata: &ReleaseMetadata,
+        declared_hash: &BytesN<32>,
+    ) -> Result<(), Error> {
+        let computed = Self::compute_artifact_metadata_hash(env, metadata);
+        if computed != *declared_hash {
+            return Err(Error::InvalidReleaseMetadata);
+        }
+        Ok(())
     }
 
     // ── guards ────────────────────────────────────────────────────────────────

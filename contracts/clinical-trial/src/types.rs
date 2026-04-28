@@ -31,6 +31,38 @@ pub struct EligibilityResult {
     pub met_inclusion: Vec<bool>,
     pub met_exclusion: Vec<bool>,
     pub disqualifying_factors: Vec<String>,
+    pub evaluation_artifacts: Vec<RuleEvaluationArtifact>,
+}
+
+/// Type of evidence used for eligibility checks.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum EvidenceType {
+    Attestation,
+    ZkVerifiedClaim,
+}
+
+/// Claim evidence supplied during deterministic eligibility evaluation.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct EligibilityClaimEvidence {
+    pub claim_hash: BytesN<32>,
+    pub evidence_type: EvidenceType,
+}
+
+/// Explainable pass/fail artifact for each rule evaluation.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct RuleEvaluationArtifact {
+    pub criteria_type: Symbol,
+    pub parameter: String,
+    pub operator: Symbol,
+    pub value: String,
+    pub expected_claim_hash: BytesN<32>,
+    pub matched_claim_hash: Option<BytesN<32>>,
+    pub evidence_type: Option<EvidenceType>,
+    pub passed: bool,
+    pub explanation: String,
 }
 
 /// Clinical trial record
