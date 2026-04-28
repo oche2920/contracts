@@ -2,33 +2,22 @@
 #![allow(deprecated)]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
-    String, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Env, String, Vec,
 };
 
+/// --------------------
+/// Error Types
+/// --------------------
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
-pub enum ContractError {
-    AlreadyRegistered = 1,
-    NotRegistered = 2,
+pub enum Error {
+    InsurerAlreadyRegistered = 1,
+    InsurerNotFound = 2,
     ReviewerAlreadyAuthorized = 3,
     ReviewerNotFound = 4,
-    InsurerNotFound = 5,
-    NoReviewersFound = 6,
-    CredentialExpired = 7,
-    CredentialRevoked = 8,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CredentialAnchor {
-    pub credential_hash: BytesN<32>,
-    pub issuer: Address,
-    pub attestation_hash: BytesN<32>,
-    pub expires_at: u64,
-    pub revocation_reference: BytesN<32>,
-    pub revoked_at: Option<u64>,
+    NoReviewersFound = 5,
+    NotAuthorized = 6,
 }
 
 #[contracttype]
@@ -53,45 +42,26 @@ pub struct InsurerRegistry;
 
 #[contractimpl]
 impl InsurerRegistry {
-    fn load_insurer(env: &Env, wallet: &Address) -> Result<InsurerData, ContractError> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Insurer(wallet.clone()))
-            .ok_or(ContractError::InsurerNotFound)
-    }
-
-    fn assert_active_insurer(env: &Env, wallet: &Address) -> Result<InsurerData, ContractError> {
-        let insurer = Self::load_insurer(env, wallet)?;
-        if insurer.credential.revoked_at.is_some() {
-            return Err(ContractError::CredentialRevoked);
-        }
-        if insurer.credential.expires_at <= env.ledger().timestamp() {
-            return Err(ContractError::CredentialExpired);
-        }
-        Ok(insurer)
-    }
-
+    /// Register a new insurance company with comprehensive information
+    ///
+    /// # Arguments
+    /// * `wallet` - The wallet address of the insurance company
+    /// * `name` - The name of the insurance company
+    /// * `license_id` - Government-issued insurance license identifier
+    /// * `metadata` - Additional information (contact details, coverage policies, etc.)
     pub fn register_insurer(
         env: Env,
         wallet: Address,
         name: String,
         license_id: String,
         metadata: String,
-        issuer: Address,
-        credential_hash: BytesN<32>,
-        attestation_hash: BytesN<32>,
-        expires_at: u64,
-        revocation_reference: BytesN<32>,
-    ) -> Result<(), ContractError> {
+    ) -> Result<(), Error> {
         wallet.require_auth();
         issuer.require_auth();
 
         let key = DataKey::Insurer(wallet.clone());
         if env.storage().persistent().has(&key) {
-            return Err(ContractError::AlreadyRegistered);
-        }
-        if expires_at <= env.ledger().timestamp() {
-            return Err(ContractError::CredentialExpired);
+            return Err(Error::InsurerAlreadyRegistered);
         }
 
         let insurer = InsurerData {
@@ -121,14 +91,21 @@ impl InsurerRegistry {
         Ok(())
     }
 
-    pub fn update_insurer(
-        env: Env,
-        wallet: Address,
-        metadata: String,
-    ) -> Result<(), ContractError> {
+    /// Update insurance company metadata and operational information
+    ///
+    /// # Arguments
+    /// * `wallet` - The wallet address of the insurance company
+    /// * `metadata` - Updated metadata information
+    pub fn update_insurer(env: Env, wallet: Address, metadata: String) -> Result<(), Error> {
         wallet.require_auth();
 
-        let mut insurer = Self::assert_active_insurer(&env, &wallet)?;
+        let key = DataKey::Insurer(wallet.clone());
+        let mut insurer: InsurerData = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::InsurerNotFound)?;
+
         insurer.metadata = metadata;
         env.storage()
             .persistent()
@@ -139,14 +116,25 @@ impl InsurerRegistry {
         Ok(())
     }
 
+    /// Update insurance company contact details
+    ///
+    /// # Arguments
+    /// * `wallet` - The wallet address of the insurance company
+    /// * `contact_details` - Updated contact information (phone, email, address)
     pub fn update_contact_details(
         env: Env,
         wallet: Address,
         contact_details: String,
-    ) -> Result<(), ContractError> {
+    ) -> Result<(), Error> {
         wallet.require_auth();
 
-        let mut insurer = Self::assert_active_insurer(&env, &wallet)?;
+        let key = DataKey::Insurer(wallet.clone());
+        let mut insurer: InsurerData = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::InsurerNotFound)?;
+
         insurer.contact_details = contact_details;
         env.storage()
             .persistent()
@@ -159,14 +147,25 @@ impl InsurerRegistry {
         Ok(())
     }
 
+    /// Update insurance company coverage policies
+    ///
+    /// # Arguments
+    /// * `wallet` - The wallet address of the insurance company
+    /// * `coverage_policies` - Updated coverage policy information
     pub fn update_coverage_policies(
         env: Env,
         wallet: Address,
         coverage_policies: String,
-    ) -> Result<(), ContractError> {
+    ) -> Result<(), Error> {
         wallet.require_auth();
 
-        let mut insurer = Self::assert_active_insurer(&env, &wallet)?;
+        let key = DataKey::Insurer(wallet.clone());
+        let mut insurer: InsurerData = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::InsurerNotFound)?;
+
         insurer.coverage_policies = coverage_policies;
         env.storage()
             .persistent()
@@ -177,32 +176,54 @@ impl InsurerRegistry {
         Ok(())
     }
 
-    pub fn get_insurer(env: Env, wallet: Address) -> Result<InsurerData, ContractError> {
-        Self::load_insurer(&env, &wallet)
+    /// Retrieve insurance company data by wallet address
+    ///
+    /// # Arguments
+    /// * `wallet` - The wallet address of the insurance company
+    ///
+    /// # Returns
+    /// The InsurerData for the given wallet address
+    pub fn get_insurer(env: Env, wallet: Address) -> Result<InsurerData, Error> {
+        let key = DataKey::Insurer(wallet);
+        env.storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::InsurerNotFound)
     }
 
-    pub fn is_insurer_active(env: Env, wallet: Address) -> bool {
-        Self::assert_active_insurer(&env, &wallet).is_ok()
-    }
+    // =====================================================
+    //            CLAIMS REVIEWERS MANAGEMENT
+    // =====================================================
 
+    /// Add a claims reviewer to the insurance company's authorized list
+    ///
+    /// # Arguments
+    /// * `insurer_wallet` - The wallet address of the insurance company
+    /// * `reviewer_wallet` - The wallet address of the claims reviewer to add
     pub fn add_claims_reviewer(
         env: Env,
         insurer_wallet: Address,
         reviewer_wallet: Address,
-    ) -> Result<(), ContractError> {
+    ) -> Result<(), Error> {
         insurer_wallet.require_auth();
-        Self::assert_active_insurer(&env, &insurer_wallet)?;
+
+        // Verify insurer exists
+        let insurer_key = DataKey::Insurer(insurer_wallet.clone());
+        if !env.storage().persistent().has(&insurer_key) {
+            return Err(Error::InsurerNotFound);
+        }
 
         let reviewers_key = DataKey::ClaimsReviewers(insurer_wallet.clone());
         let mut reviewers: Vec<Address> = env
             .storage()
             .persistent()
             .get(&reviewers_key)
-            .unwrap_or(Vec::new(&env));
+            .unwrap_or_else(|| Vec::new(&env));
 
-        for reviewer in reviewers.iter() {
-            if reviewer == reviewer_wallet {
-                return Err(ContractError::ReviewerAlreadyAuthorized);
+        // Check if reviewer already exists
+        for i in 0..reviewers.len() {
+            if reviewers.get(i).ok_or(Error::NotAuthorized)? == reviewer_wallet {
+                return Err(Error::ReviewerAlreadyAuthorized);
             }
         }
 
@@ -216,11 +237,16 @@ impl InsurerRegistry {
         Ok(())
     }
 
+    /// Remove a claims reviewer from the insurance company's authorized list
+    ///
+    /// # Arguments
+    /// * `insurer_wallet` - The wallet address of the insurance company
+    /// * `reviewer_wallet` - The wallet address of the claims reviewer to remove
     pub fn remove_claims_reviewer(
         env: Env,
         insurer_wallet: Address,
         reviewer_wallet: Address,
-    ) -> Result<(), ContractError> {
+    ) -> Result<(), Error> {
         insurer_wallet.require_auth();
         Self::assert_active_insurer(&env, &insurer_wallet)?;
 
@@ -229,12 +255,13 @@ impl InsurerRegistry {
             .storage()
             .persistent()
             .get(&reviewers_key)
-            .ok_or(ContractError::NoReviewersFound)?;
+            .ok_or(Error::NoReviewersFound)?;
 
         let mut new_reviewers: Vec<Address> = Vec::new(&env);
         let mut found = false;
 
-        for reviewer in reviewers.iter() {
+        for i in 0..reviewers.len() {
+            let reviewer = reviewers.get(i).ok_or(Error::NotAuthorized)?;
             if reviewer != reviewer_wallet {
                 new_reviewers.push_back(reviewer);
             } else {
@@ -243,7 +270,7 @@ impl InsurerRegistry {
         }
 
         if !found {
-            return Err(ContractError::ReviewerNotFound);
+            return Err(Error::ReviewerNotFound);
         }
 
         env.storage()
@@ -260,8 +287,8 @@ impl InsurerRegistry {
     pub fn get_claims_reviewers(env: Env, insurer_wallet: Address) -> Vec<Address> {
         env.storage()
             .persistent()
-            .get(&DataKey::ClaimsReviewers(insurer_wallet))
-            .unwrap_or(Vec::new(&env))
+            .get(&reviewers_key)
+            .unwrap_or_else(|| Vec::new(&env))
     }
 
     pub fn is_authorized_reviewer(
@@ -269,19 +296,17 @@ impl InsurerRegistry {
         insurer_wallet: Address,
         reviewer_wallet: Address,
     ) -> bool {
-        if !Self::is_insurer_active(env.clone(), insurer_wallet.clone()) {
-            return false;
-        }
+        let reviewers_key = DataKey::ClaimsReviewers(insurer_wallet);
+        let reviewers: Vec<Address> = match env.storage().persistent().get(&reviewers_key) {
+            Some(r) => r,
+            None => return false,
+        };
 
-        let reviewers: Vec<Address> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::ClaimsReviewers(insurer_wallet))
-            .unwrap_or(Vec::new(&env));
-
-        for reviewer in reviewers.iter() {
-            if reviewer == reviewer_wallet {
-                return true;
+        for i in 0..reviewers.len() {
+            if let Ok(reviewer) = reviewers.get(i).ok_or(()) {
+                if reviewer == reviewer_wallet {
+                    return true;
+                }
             }
         }
         false

@@ -2,16 +2,16 @@
 #![allow(deprecated)]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror, symbol_short, Address, Bytes, BytesN,
-    Env, Symbol, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, Env, Symbol,
+    Vec,
 };
 
 mod test;
 
-// ── Errors ────────────────────────────────────────────────────────────────────
+// ── Error types ──────────────────────────────────────────────────────────────
 
 #[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum Error {
     AlreadyInitialized = 1,
@@ -32,8 +32,6 @@ pub enum Error {
     /// Removing this signer would make the threshold unreachable.
     ThresholdBreached  = 13,
 }
-
-// ── Storage keys ──────────────────────────────────────────────────────────────
 
 #[contracttype]
 pub enum DataKey {
@@ -70,13 +68,6 @@ pub struct Proposal {
     pub abstentions: Vec<Address>,
     pub proposed_at: u64,
     pub status: ProposalStatus,
-    /// Snapshot of the eligible signer set at proposal time.
-    /// Prevents signer-churn from changing quorum/threshold mid-vote.
-    pub eligible_signers: Vec<Address>,
-    /// Domain tag: SHA-256(contract_address ++ "multisig-governance" ++ action_id_bytes).
-    /// Binds this proposal to a specific contract instance and action (#233).
-    pub domain_tag: BytesN<32>,
-}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -104,16 +95,17 @@ pub struct MultisigGovernance;
 
 #[contractimpl]
 impl MultisigGovernance {
-    /// `quorum_min` is the minimum number of eligible signers that must
-    /// participate (approve **or** abstain) for the outcome to be valid.
+    /// Initialize with a set of admin signers, an approval threshold, and a
+    /// proposal TTL in seconds.
     pub fn initialize(
         env: Env,
         signers: Vec<Address>,
         threshold: u32,
         ttl_seconds: u64,
-        quorum_min: u32,
     ) -> Result<(), Error> {
-        Self::assert_not_initialized(&env)?;
+        if env.storage().persistent().has(&DataKey::Signers) {
+            return Err(Error::AlreadyInitialized);
+        }
         if threshold == 0 || threshold as usize > signers.len() as usize {
             return Err(Error::InvalidThreshold);
         }
@@ -122,24 +114,22 @@ impl MultisigGovernance {
             .persistent()
             .set(&DataKey::Threshold, &threshold);
         env.storage().persistent().set(&DataKey::Ttl, &ttl_seconds);
-        env.storage().persistent().set(&DataKey::QuorumMin, &quorum_min);
-        env.storage().persistent().set(&DataKey::Initialized, &true);
         Ok(())
     }
 
+    /// Any admin signer may open a new proposal.
     pub fn propose_multisig_action(
         env: Env,
         signer: Address,
         action_id: Symbol,
         payload: Bytes,
     ) -> Result<(), Error> {
-        Self::assert_initialized(&env)?;
         signer.require_auth();
         Self::assert_signer(&env, &signer)?;
 
         let key = DataKey::Proposal(action_id.clone());
         if env.storage().persistent().has(&key) {
-            return Err(Error::ProposalExists);
+            return Err(Error::ProposalAlreadyExecuted);
         }
 
         // Snapshot the eligible signer set at proposal time (#232).
@@ -170,12 +160,14 @@ impl MultisigGovernance {
         Ok(())
     }
 
+    /// An admin signer approves an existing proposal. Once the approval count
+    /// reaches the threshold the proposal is marked Executed and an event is
+    /// emitted. Expired or already-executed proposals are rejected.
     pub fn approve_multisig_action(
         env: Env,
         signer: Address,
         action_id: Symbol,
     ) -> Result<(), Error> {
-        Self::assert_initialized(&env)?;
         signer.require_auth();
         Self::assert_signer(&env, &signer)?;
 
@@ -186,64 +178,8 @@ impl MultisigGovernance {
             .get(&key)
             .ok_or(Error::ProposalNotFound)?;
 
-        Self::assert_pending_and_not_expired(&env, &proposal)?;
-        Self::assert_not_already_voted(&proposal, &signer)?;
-
-        proposal.approvals.push_back(signer.clone());
-
-        Self::try_finalize(&env, &mut proposal)?;
-
-        env.storage().persistent().set(&key, &proposal);
-        env.events()
-            .publish((symbol_short!("approved"), action_id), signer);
-        Ok(())
-    }
-
-    /// Record an explicit abstention.  Abstentions count toward quorum but not
-    /// toward the approval threshold.
-    pub fn abstain_multisig_action(
-        env: Env,
-        signer: Address,
-        action_id: Symbol,
-    ) -> Result<(), Error> {
-        Self::assert_initialized(&env)?;
-        signer.require_auth();
-        Self::assert_signer(&env, &signer)?;
-
-        let key = DataKey::Proposal(action_id.clone());
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::ProposalNotFound)?;
-
-        Self::assert_pending_and_not_expired(&env, &proposal)?;
-        Self::assert_not_already_voted(&proposal, &signer)?;
-
-        proposal.abstentions.push_back(signer.clone());
-
-        Self::try_finalize(&env, &mut proposal)?;
-
-        env.storage().persistent().set(&key, &proposal);
-        env.events()
-            .publish((symbol_short!("abstained"), action_id), signer);
-        Ok(())
-    }
-
-    /// Finalize a proposal whose voting window has closed without reaching the
-    /// threshold.  Marks it as Failed so state is deterministic.
-    pub fn finalize_expired(env: Env, action_id: Symbol) -> Result<(), Error> {
-        Self::assert_initialized(&env)?;
-
-        let key = DataKey::Proposal(action_id.clone());
-        let mut proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&key)
-            .ok_or(Error::ProposalNotFound)?;
-
-        if proposal.status != ProposalStatus::Pending {
-            return Err(Error::AlreadyFinalized);
+        if proposal.status == ProposalStatus::Executed {
+            return Err(Error::ProposalAlreadyExecuted);
         }
 
         let ttl: u64 = env
@@ -252,16 +188,16 @@ impl MultisigGovernance {
             .get(&DataKey::Ttl)
             .ok_or(Error::NotInitialized)?;
 
-        if env.ledger().timestamp() <= proposal.proposed_at + ttl {
-            return Err(Error::Expired); // not yet expired — reuse error variant
+        if env.ledger().timestamp() > proposal.proposed_at + ttl {
+            return Err(Error::ProposalExpired);
         }
 
-        proposal.status = ProposalStatus::Failed;
-        env.storage().persistent().set(&key, &proposal);
-        env.events()
-            .publish((symbol_short!("failed"), action_id), proposal.approvals.len());
-        Ok(())
-    }
+        // Reject duplicate approvals from the same signer.
+        for i in 0..proposal.approvals.len() {
+            if proposal.approvals.get(i).ok_or(Error::Unauthorized)? == signer {
+                return Err(Error::AlreadyApproved);
+            }
+        }
 
     pub fn get_proposal(env: Env, action_id: Symbol) -> Result<Proposal, Error> {
         env.storage()
@@ -447,15 +383,6 @@ impl MultisigGovernance {
             .persistent()
             .get(&DataKey::Threshold)
             .ok_or(Error::NotInitialized)?;
-        let quorum_min: u32 = env
-            .storage()
-            .persistent()
-            .get(&DataKey::QuorumMin)
-            .ok_or(Error::NotInitialized)?;
-
-        let participation = proposal.approvals.len() + proposal.abstentions.len();
-        let approvals = proposal.approvals.len();
-        let eligible = proposal.eligible_signers.len();
 
         // Execute when threshold approvals are reached and quorum is satisfied.
         if approvals >= threshold {
@@ -465,69 +392,15 @@ impl MultisigGovernance {
             proposal.status = ProposalStatus::Executed;
             return Ok(());
         }
-
-        // If every eligible signer has voted and threshold is still not met,
-        // finalize as Failed so no further votes can arrive.
-        if participation >= eligible {
-            proposal.status = ProposalStatus::Failed;
-        }
-
         Ok(())
     }
 
-    /// Compute a domain tag that binds a proposal to this specific contract
-    /// instance and action type, preventing cross-context replay (#233).
-    ///
-    /// tag = SHA-256( contract_address_xdr ++ b"multisig-governance" ++ action_id_xdr )
-    fn compute_domain_tag(env: &Env, action_id: &Symbol) -> BytesN<32> {
-        use soroban_sdk::xdr::ToXdr;
-        let mut data = Bytes::new(env);
-        let addr_xdr = env.current_contract_address().to_xdr(env);
-        data.append(&addr_xdr);
-        data.append(&Bytes::from_slice(env, b"multisig-governance"));
-        let sym_xdr = action_id.to_xdr(env);
-        data.append(&sym_xdr);
-        env.crypto().sha256(&data).into()
-    }
-
-    fn assert_pending_and_not_expired(env: &Env, proposal: &Proposal) -> Result<(), Error> {
-        match proposal.status {
-            ProposalStatus::Executed => return Err(Error::AlreadyExecuted),
-            ProposalStatus::Failed   => return Err(Error::AlreadyFinalized),
-            ProposalStatus::Pending  => {}
-        }
-        let ttl: u64 = env
-            .storage()
+    /// Read a proposal by action_id.
+    pub fn get_proposal(env: Env, action_id: Symbol) -> Result<Proposal, Error> {
+        env.storage()
             .persistent()
-            .get(&DataKey::Ttl)
-            .ok_or(Error::NotInitialized)?;
-        if env.ledger().timestamp() > proposal.proposed_at + ttl {
-            return Err(Error::Expired);
-        }
-        Ok(())
-    }
-
-    fn assert_not_already_voted(proposal: &Proposal, signer: &Address) -> Result<(), Error> {
-        for i in 0..proposal.approvals.len() {
-            if proposal.approvals.get(i).unwrap() == *signer {
-                return Err(Error::AlreadyVoted);
-            }
-        }
-        for i in 0..proposal.abstentions.len() {
-            if proposal.abstentions.get(i).unwrap() == *signer {
-                return Err(Error::AlreadyVoted);
-            }
-        }
-        Ok(())
-    }
-
-    // ── guards ────────────────────────────────────────────────────────────────
-
-    fn assert_initialized(env: &Env) -> Result<(), Error> {
-        if !env.storage().persistent().has(&DataKey::Initialized) {
-            return Err(Error::NotInitialized);
-        }
-        Ok(())
+            .get(&DataKey::Proposal(action_id))
+            .ok_or(Error::ProposalNotFound)
     }
 
     fn assert_not_initialized(env: &Env) -> Result<(), Error> {
@@ -543,11 +416,11 @@ impl MultisigGovernance {
             .persistent()
             .get(&DataKey::Signers)
             .ok_or(Error::NotInitialized)?;
-        for signer in signers.iter() {
-            if signer == *caller {
+        for i in 0..signers.len() {
+            if signers.get(i).ok_or(Error::Unauthorized)? == *caller {
                 return Ok(());
             }
         }
-        Err(Error::NotASigner)
+        Err(Error::Unauthorized)
     }
 }
