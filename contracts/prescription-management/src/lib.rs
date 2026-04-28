@@ -3,6 +3,7 @@
 use soroban_sdk::{
     Address, BytesN, Env, String, Symbol, Vec, contract, contracterror, contractimpl, contracttype,
 };
+use shared::temporal;
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -28,6 +29,8 @@ pub enum Error {
     HighImpactRequiresProposal = 18,
     ProposalNotFound = 19,
     ProposalAlreadyFinalized = 20,
+    /// valid_until must be in the future and within MAX_VALIDITY_WINDOW_SECS of issue time
+    InvalidValidityWindow = 21,
 }
 
 #[contracttype]
@@ -212,8 +215,18 @@ impl PrescriptionContract {
         provider_id: Address,
         patient_id: Address,
         req: IssueRequest,
-    ) -> u64 {
+    ) -> Result<u64, Error> {
         provider_id.require_auth();
+
+        // #215 – valid_until must be in the future and within a 1-year window
+        temporal::must_be_future(&env, req.valid_until)
+            .map_err(|_| Error::InvalidValidityWindow)?;
+        temporal::within_validity_window(
+            env.ledger().timestamp(),
+            req.valid_until,
+            shared::temporal::MAX_VALIDITY_WINDOW_SECS,
+        )
+        .map_err(|_| Error::InvalidValidityWindow)?;
 
         let id = env
             .storage()
@@ -247,7 +260,7 @@ impl PrescriptionContract {
             .instance()
             .set(&Symbol::new(&env, "ID_COUNTER"), &(id + 1));
 
-        id
+        Ok(id)
     }
 
     pub fn dispense_prescription(
@@ -280,7 +293,6 @@ impl PrescriptionContract {
 
         // Validate pharmacy authorization
         if let Some(ref current_pharmacy) = p.current_pharmacy {
-            if *current_pharmacy != pharmacy_id {
             if current_pharmacy != &pharmacy_id {
                 return Err(Error::PharmacyNotAuthorized);
             }

@@ -1,10 +1,10 @@
 #![no_std]
-#![allow(deprecated)]
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, symbol_short, Address, Env, String,
     Symbol, Vec,
 };
+use shared::{events::EVENT_VERSION, temporal};
 
 mod storage;
 mod types;
@@ -14,32 +14,38 @@ pub use storage::*;
 pub use types::*;
 
 /// Events for allergy management operations
+/// All events carry `version: EVENT_VERSION` for deterministic schema identification.
 #[contractevent]
 pub struct AllergyRecorded {
+    pub version: u32,
     pub patient_id: Address,
     pub allergy_id: u64,
 }
 
 #[contractevent]
 pub struct AllergyUpdated {
+    pub version: u32,
     pub allergy_id: u64,
     pub new_severity: Symbol,
 }
 
 #[contractevent]
 pub struct AllergyResolved {
+    pub version: u32,
     pub allergy_id: u64,
     pub resolution_date: u64,
 }
 
 #[contractevent]
 pub struct AccessGranted {
+    pub version: u32,
     pub patient_id: Address,
     pub provider_id: Address,
 }
 
 #[contractevent]
 pub struct AccessRevoked {
+    pub version: u32,
     pub patient_id: Address,
     pub provider_id: Address,
 }
@@ -93,6 +99,11 @@ impl AllergyManagement {
         validation::validate_allergen_type(&request.allergen_type)?;
         validation::validate_severity(&request.severity)?;
 
+        // #215 – onset_date must not be in the future (it records a past event)
+        if let Some(onset) = request.onset_date {
+            temporal::not_future(&env, onset).map_err(|_| Error::InvalidDate)?;
+        }
+
         // Check for duplicate allergy
         if storage::check_duplicate_allergy(
             &env,
@@ -129,6 +140,7 @@ impl AllergyManagement {
 
         // Emit event
         AllergyRecorded {
+            version: EVENT_VERSION,
             patient_id: patient_id.clone(),
             allergy_id,
         }
@@ -176,6 +188,7 @@ impl AllergyManagement {
 
         // Emit event
         AllergyUpdated {
+            version: EVENT_VERSION,
             allergy_id,
             new_severity: new_severity.clone(),
         }
@@ -194,13 +207,17 @@ impl AllergyManagement {
     ) -> Result<(), Error> {
         provider_id.require_auth();
 
-        // Validate date
-        if resolution_date > env.ledger().timestamp() {
-            return Err(Error::InvalidDate);
-        }
+        // #215 – resolution_date must not be future and must follow onset_date
+        temporal::not_future(&env, resolution_date).map_err(|_| Error::InvalidDate)?;
 
         // Load allergy record
         let mut allergy = storage::get_allergy(&env, allergy_id)?;
+
+        // If onset is known, resolution must come after it
+        if let Some(onset) = allergy.onset_date {
+            temporal::resolution_after_onset(onset, resolution_date)
+                .map_err(|_| Error::InvalidDate)?;
+        }
 
         // Check if already resolved
         if allergy.status == AllergyStatus::Resolved {
@@ -217,6 +234,7 @@ impl AllergyManagement {
 
         // Emit event
         AllergyResolved {
+            version: EVENT_VERSION,
             allergy_id,
             resolution_date,
         }
@@ -331,6 +349,7 @@ impl AllergyManagement {
         storage::grant_access(&env, &patient_id, &provider_id);
 
         AccessGranted {
+            version: EVENT_VERSION,
             patient_id: patient_id.clone(),
             provider_id: provider_id.clone(),
         }
@@ -343,6 +362,7 @@ impl AllergyManagement {
         storage::revoke_access(&env, &patient_id, &provider_id);
 
         AccessRevoked {
+            version: EVENT_VERSION,
             patient_id: patient_id.clone(),
             provider_id: provider_id.clone(),
         }

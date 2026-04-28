@@ -11,6 +11,7 @@ mod test;
 use soroban_sdk::{contract, contractimpl, Address, Bytes, BytesN, Env, String, Symbol, Vec};
 use storage::*;
 use types::*;
+use shared::temporal;
 
 const MAX_APPEAL_LEVEL: u32 = 3;
 
@@ -238,10 +239,24 @@ impl PriorAuthorizationContract {
         update_reviewer_case_count(&env, &reviewer_id, 1)?;
 
         if decision == approved_sym {
+            // #215 – validate the authorization validity window on approval
+            let effective_from = valid_from.unwrap_or(env.ledger().timestamp());
+            let effective_until =
+                valid_until.unwrap_or(env.ledger().timestamp() + (30 * 24 * 60 * 60));
+
+            temporal::must_be_future(&env, effective_until)
+                .map_err(|_| Error::InvalidDecision)?;
+            temporal::within_validity_window(
+                effective_from,
+                effective_until,
+                shared::temporal::MAX_VALIDITY_WINDOW_SECS,
+            )
+            .map_err(|_| Error::InvalidDecision)?;
+
             req.status = AuthStatus::Approved;
             req.approved_units = approved_units;
-            req.valid_from = valid_from.or(Some(env.ledger().timestamp()));
-            req.valid_until = valid_until.or(Some(env.ledger().timestamp() + (30 * 24 * 60 * 60))); // 30 days default
+            req.valid_from = Some(effective_from);
+            req.valid_until = Some(effective_until);
             req.decision_date = Some(env.ledger().timestamp());
 
             // Remove from overdue tracking if present

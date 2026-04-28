@@ -1,20 +1,15 @@
 [package]
-name = "allergy-management"
-version = "0.1.0"
+name = "shared"
+version = "0.0.0"
 edition = "2021"
 publish = false
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["lib"]
 doctest = false
 
 [dependencies]
 soroban-sdk = { workspace = true }
-ttl-config = { path = "../ttl-config" }
-shared = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
-
-[features]
-testutils = ["soroban-sdk/testutils"]

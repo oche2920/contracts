@@ -160,4 +160,8 @@ pub enum Error {
     NotFound = 1,
     Unauthorized = 2,
     InvalidInput = 3,
+    /// scheduled_date must be strictly in the future
+    InvalidScheduledDate = 4,
+    /// procedure_date / image_date must not be in the future
+    InvalidPastDate = 5,
 }

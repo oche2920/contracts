@@ -1,10 +1,36 @@
 #![no_std]
 #![allow(clippy::too_many_arguments)]
 
-use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol, Vec};
+use soroban_sdk::{
+    contract, contractevent, contractimpl, Address, BytesN, Env, String, Symbol, Vec,
+};
+use shared::{events::EVENT_VERSION, temporal};
 
 mod types;
 use types::*;
+
+/// --------------------
+/// Events
+/// --------------------
+
+#[contractevent]
+pub struct ProcedureScheduled {
+    pub version: u32,
+    pub appointment_id: u64,
+    pub treatment_plan_id: u64,
+}
+
+#[contractevent]
+pub struct ProcedurePerformed {
+    pub version: u32,
+    pub appointment_id: u64,
+}
+
+#[contractevent]
+pub struct RadiographRecorded {
+    pub version: u32,
+    pub radiograph_id: u64,
+}
 
 #[contract]
 pub struct DentalRecordsContract;
@@ -143,6 +169,10 @@ impl DentalRecordsContract {
         estimated_duration: u32,
         sedation_required: bool,
     ) -> Result<u64, Error> {
+        // #215 – dental procedure dates are future-scheduled appointments
+        temporal::must_be_future(&env, scheduled_date)
+            .map_err(|_| Error::InvalidScheduledDate)?;
+
         let plan: TreatmentPlan = env
             .storage()
             .persistent()
@@ -171,6 +201,13 @@ impl DentalRecordsContract {
             .instance()
             .set(&DataKey::AppointmentCount, &count);
 
+        ProcedureScheduled {
+            version: EVENT_VERSION,
+            appointment_id: count,
+            treatment_plan_id,
+        }
+        .publish(&env);
+
         Ok(count)
     }
 
@@ -185,6 +222,10 @@ impl DentalRecordsContract {
         post_op_instructions_hash: BytesN<32>,
     ) -> Result<(), Error> {
         dentist_id.require_auth();
+
+        // #215 – procedure_date records when the procedure happened; it must not be future
+        temporal::not_future(&env, procedure_date)
+            .map_err(|_| Error::InvalidPastDate)?;
 
         let mut appt: Appointment = env
             .storage()
@@ -209,6 +250,12 @@ impl DentalRecordsContract {
             .persistent()
             .set(&DataKey::ProcedureLog(appointment_id), &log);
 
+        ProcedurePerformed {
+            version: EVENT_VERSION,
+            appointment_id,
+        }
+        .publish(&env);
+
         Ok(())
     }
 
@@ -222,6 +269,10 @@ impl DentalRecordsContract {
         image_hash: BytesN<32>,
     ) -> Result<u64, Error> {
         patient_id.require_auth();
+
+        // #215 – image_date is when the X-ray was taken; it must not be future
+        temporal::not_future(&env, image_date)
+            .map_err(|_| Error::InvalidPastDate)?;
 
         let mut count: u64 = env
             .storage()
@@ -245,6 +296,12 @@ impl DentalRecordsContract {
         env.storage()
             .instance()
             .set(&DataKey::RadiographCount, &count);
+
+        RadiographRecorded {
+            version: EVENT_VERSION,
+            radiograph_id: count,
+        }
+        .publish(&env);
 
         Ok(count)
     }

@@ -2,7 +2,12 @@
 #![allow(clippy::too_many_arguments)]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, String, Symbol, Vec,
+    contract, contractevent, contracterror, contractimpl, contracttype, Address, BytesN, Env,
+    String, Symbol, Vec,
+};
+use shared::{
+    pagination::{self, PageResult, MAX_PAGE_SIZE},
+    temporal,
 };
 
 /// --------------------
@@ -88,8 +93,18 @@ pub enum DataKey {
     PreliminaryReport(u64),
     FinalReport(u64),
     PeerReview(u64),
-    PatientOrders(Address),
-    ProviderOrders(Address),
+    /// Paged order index per patient: (patient, page_num) → Vec<u64>
+    PatientOrdersPage(Address, u32),
+    /// Current (highest-written) page index for a patient's order list
+    PatientOrdersHead(Address),
+    /// Total order count per patient (for PageResult.total)
+    PatientOrdersTotal(Address),
+    /// Paged order index per provider: (provider, page_num) → Vec<u64>
+    ProviderOrdersPage(Address, u32),
+    /// Current page index for a provider's order list
+    ProviderOrdersHead(Address),
+    /// Total order count per provider
+    ProviderOrdersTotal(Address),
 }
 
 /// --------------------
@@ -108,6 +123,53 @@ pub enum Error {
     PreliminaryReportExists = 6,
     FinalReportExists = 7,
     PeerReviewExists = 8,
+    /// scheduled_time must be strictly in the future
+    InvalidScheduledTime = 9,
+    /// study_date must not be in the future
+    InvalidStudyDate = 10,
+}
+
+/// --------------------
+/// Events
+/// --------------------
+
+#[contractevent]
+pub struct ImagingOrdered {
+    pub version: u32,
+    pub order_id: u64,
+    pub provider_id: Address,
+}
+
+#[contractevent]
+pub struct ImagingScheduled {
+    pub version: u32,
+    pub order_id: u64,
+}
+
+#[contractevent]
+pub struct ImagesUploaded {
+    pub version: u32,
+    pub order_id: u64,
+    pub dicom_hash: BytesN<32>,
+}
+
+#[contractevent]
+pub struct PreliminaryReportSubmitted {
+    pub version: u32,
+    pub order_id: u64,
+    pub urgent_findings: bool,
+}
+
+#[contractevent]
+pub struct FinalReportSubmitted {
+    pub version: u32,
+    pub order_id: u64,
+}
+
+#[contractevent]
+pub struct PeerReviewRequested {
+    pub version: u32,
+    pub order_id: u64,
 }
 
 #[contract]
@@ -129,12 +191,10 @@ impl ImagingRadiology {
     ) -> Result<u64, Error> {
         provider_id.require_auth();
 
-        // Get next order ID
         let counter_key = DataKey::OrderCounter;
         let order_id: u64 = env.storage().persistent().get(&counter_key).unwrap_or(0) + 1;
         env.storage().persistent().set(&counter_key, &order_id);
 
-        // Create imaging order
         let order = ImagingOrder {
             order_id,
             provider_id: provider_id.clone(),
@@ -148,38 +208,47 @@ impl ImagingRadiology {
             ordered_at: env.ledger().timestamp(),
         };
 
-        // Store order
         let order_key = DataKey::ImagingOrder(order_id);
         env.storage().persistent().set(&order_key, &order);
 
-        // Track patient orders
-        let patient_key = DataKey::PatientOrders(patient_id.clone());
-        let mut patient_orders: Vec<u64> = env
-            .storage()
-            .persistent()
-            .get(&patient_key)
-            .unwrap_or(Vec::new(&env));
-        patient_orders.push_back(order_id);
-        env.storage()
-            .persistent()
-            .set(&patient_key, &patient_orders);
+        // Paged patient order index
+        let p = patient_id.clone();
+        pagination::push_paged(
+            &env,
+            |page| DataKey::PatientOrdersPage(p.clone(), page),
+            || DataKey::PatientOrdersHead(p.clone()),
+            order_id,
+        );
+        let pt_key = DataKey::PatientOrdersTotal(patient_id.clone());
+        let pt: u32 = env.storage().persistent().get(&pt_key).unwrap_or(0);
+        env.storage().persistent().set(&pt_key, &(pt + 1));
 
-        // Track provider orders
-        let provider_key = DataKey::ProviderOrders(provider_id.clone());
-        let mut provider_orders: Vec<u64> = env
-            .storage()
-            .persistent()
-            .get(&provider_key)
-            .unwrap_or(Vec::new(&env));
-        provider_orders.push_back(order_id);
-        env.storage()
-            .persistent()
-            .set(&provider_key, &provider_orders);
+        // Paged provider order index
+        let prov = provider_id.clone();
+        pagination::push_paged(
+            &env,
+            |page| DataKey::ProviderOrdersPage(prov.clone(), page),
+            || DataKey::ProviderOrdersHead(prov.clone()),
+            order_id,
+        );
+        let pv_key = DataKey::ProviderOrdersTotal(provider_id.clone());
+        let pv: u32 = env.storage().persistent().get(&pv_key).unwrap_or(0);
+        env.storage().persistent().set(&pv_key, &(pv + 1));
+
+        ImagingOrdered {
+            version: shared::events::EVENT_VERSION,
+            order_id,
+            provider_id,
+        }
+        .publish(&env);
 
         Ok(order_id)
     }
 
-    /// Schedule an imaging study
+    /// Schedule an imaging study.
+    ///
+    /// `scheduled_time` must be strictly in the future: imaging cannot be
+    /// scheduled for a time that has already passed.
     pub fn schedule_imaging(
         env: Env,
         order_id: u64,
@@ -189,7 +258,10 @@ impl ImagingRadiology {
     ) -> Result<(), Error> {
         imaging_center.require_auth();
 
-        // Verify order exists
+        // #215 – scheduling windows must be in the future
+        temporal::must_be_future(&env, scheduled_time)
+            .map_err(|_| Error::InvalidScheduledTime)?;
+
         let order_key = DataKey::ImagingOrder(order_id);
         let mut order: ImagingOrder = env
             .storage()
@@ -197,13 +269,11 @@ impl ImagingRadiology {
             .get(&order_key)
             .ok_or(Error::OrderNotFound)?;
 
-        // Check if already scheduled
         let schedule_key = DataKey::ImagingSchedule(order_id);
         if env.storage().persistent().has(&schedule_key) {
             return Err(Error::AlreadyScheduled);
         }
 
-        // Create schedule
         let schedule = ImagingSchedule {
             order_id,
             imaging_center,
@@ -214,14 +284,22 @@ impl ImagingRadiology {
 
         env.storage().persistent().set(&schedule_key, &schedule);
 
-        // Update order status
         order.status = Symbol::new(&env, "SCHEDULED");
         env.storage().persistent().set(&order_key, &order);
+
+        ImagingScheduled {
+            version: shared::events::EVENT_VERSION,
+            order_id,
+        }
+        .publish(&env);
 
         Ok(())
     }
 
-    /// Upload DICOM images for a study
+    /// Upload DICOM images for a study.
+    ///
+    /// `study_date` must not be in the future: images are uploaded after the
+    /// study is performed.
     pub fn upload_images(
         env: Env,
         order_id: u64,
@@ -232,7 +310,10 @@ impl ImagingRadiology {
     ) -> Result<(), Error> {
         imaging_center.require_auth();
 
-        // Verify order exists
+        // #215 – study_date must be a past or present timestamp
+        temporal::not_future(&env, study_date)
+            .map_err(|_| Error::InvalidStudyDate)?;
+
         let order_key = DataKey::ImagingOrder(order_id);
         let mut order: ImagingOrder = env
             .storage()
@@ -240,17 +321,15 @@ impl ImagingRadiology {
             .get(&order_key)
             .ok_or(Error::OrderNotFound)?;
 
-        // Check if images already uploaded
         let images_key = DataKey::DicomImages(order_id);
         if env.storage().persistent().has(&images_key) {
             return Err(Error::ImagesAlreadyUploaded);
         }
 
-        // Store DICOM reference
         let images = DicomImages {
             order_id,
             imaging_center,
-            dicom_hash,
+            dicom_hash: dicom_hash.clone(),
             image_count,
             study_date,
             uploaded_at: env.ledger().timestamp(),
@@ -258,9 +337,15 @@ impl ImagingRadiology {
 
         env.storage().persistent().set(&images_key, &images);
 
-        // Update order status
         order.status = Symbol::new(&env, "IN_PROGRESS");
         env.storage().persistent().set(&order_key, &order);
+
+        ImagesUploaded {
+            version: shared::events::EVENT_VERSION,
+            order_id,
+            dicom_hash,
+        }
+        .publish(&env);
 
         Ok(())
     }
@@ -275,26 +360,22 @@ impl ImagingRadiology {
     ) -> Result<(), Error> {
         radiologist_id.require_auth();
 
-        // Verify order exists
         let order_key = DataKey::ImagingOrder(order_id);
         env.storage()
             .persistent()
             .get::<_, ImagingOrder>(&order_key)
             .ok_or(Error::OrderNotFound)?;
 
-        // Verify images uploaded
         let images_key = DataKey::DicomImages(order_id);
         if !env.storage().persistent().has(&images_key) {
             return Err(Error::InvalidStatus);
         }
 
-        // Check if preliminary report already exists
         let prelim_key = DataKey::PreliminaryReport(order_id);
         if env.storage().persistent().has(&prelim_key) {
             return Err(Error::PreliminaryReportExists);
         }
 
-        // Create preliminary report
         let report = PreliminaryReport {
             order_id,
             radiologist_id,
@@ -304,6 +385,13 @@ impl ImagingRadiology {
         };
 
         env.storage().persistent().set(&prelim_key, &report);
+
+        PreliminaryReportSubmitted {
+            version: shared::events::EVENT_VERSION,
+            order_id,
+            urgent_findings,
+        }
+        .publish(&env);
 
         Ok(())
     }
@@ -318,7 +406,6 @@ impl ImagingRadiology {
     ) -> Result<(), Error> {
         radiologist_id.require_auth();
 
-        // Verify order exists
         let order_key = DataKey::ImagingOrder(order_id);
         let mut order: ImagingOrder = env
             .storage()
@@ -326,19 +413,16 @@ impl ImagingRadiology {
             .get(&order_key)
             .ok_or(Error::OrderNotFound)?;
 
-        // Verify images uploaded
         let images_key = DataKey::DicomImages(order_id);
         if !env.storage().persistent().has(&images_key) {
             return Err(Error::InvalidStatus);
         }
 
-        // Check if final report already exists
         let final_key = DataKey::FinalReport(order_id);
         if env.storage().persistent().has(&final_key) {
             return Err(Error::FinalReportExists);
         }
 
-        // Create final report
         let report = FinalReport {
             order_id,
             radiologist_id,
@@ -349,9 +433,14 @@ impl ImagingRadiology {
 
         env.storage().persistent().set(&final_key, &report);
 
-        // Update order status to completed
         order.status = Symbol::new(&env, "COMPLETED");
         env.storage().persistent().set(&order_key, &order);
+
+        FinalReportSubmitted {
+            version: shared::events::EVENT_VERSION,
+            order_id,
+        }
+        .publish(&env);
 
         Ok(())
     }
@@ -365,20 +454,17 @@ impl ImagingRadiology {
     ) -> Result<(), Error> {
         requesting_radiologist.require_auth();
 
-        // Verify order exists
         let order_key = DataKey::ImagingOrder(order_id);
         env.storage()
             .persistent()
             .get::<_, ImagingOrder>(&order_key)
             .ok_or(Error::OrderNotFound)?;
 
-        // Check if peer review already requested
         let peer_key = DataKey::PeerReview(order_id);
         if env.storage().persistent().has(&peer_key) {
             return Err(Error::PeerReviewExists);
         }
 
-        // Create peer review request
         let peer_review = PeerReview {
             order_id,
             requesting_radiologist,
@@ -388,6 +474,12 @@ impl ImagingRadiology {
         };
 
         env.storage().persistent().set(&peer_key, &peer_review);
+
+        PeerReviewRequested {
+            version: shared::events::EVENT_VERSION,
+            order_id,
+        }
+        .publish(&env);
 
         Ok(())
     }
@@ -463,40 +555,61 @@ impl ImagingRadiology {
         Ok(env.storage().persistent().get(&key))
     }
 
-    /// Get all orders for a patient
+    /// Get a page of order IDs for a patient.
+    ///
+    /// Each page contains at most `MAX_PAGE_SIZE` IDs.  Pass the returned
+    /// `next_page` value as `page` to retrieve the following page; stop when
+    /// `next_page == NO_NEXT_PAGE`.
     pub fn get_patient_orders(
         env: Env,
         patient_id: Address,
         requester: Address,
-    ) -> Result<Vec<u64>, Error> {
+        page: u32,
+    ) -> Result<PageResult, Error> {
         requester.require_auth();
         if requester != patient_id {
             return Err(Error::UnauthorizedAccess);
         }
-        let key = DataKey::PatientOrders(patient_id);
-        Ok(env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or(Vec::new(&env)))
+        let p = patient_id.clone();
+        let total_key = DataKey::PatientOrdersTotal(patient_id.clone());
+        let total: u32 = env.storage().persistent().get(&total_key).unwrap_or(0);
+        Ok(pagination::get_paged(
+            &env,
+            |pg| DataKey::PatientOrdersPage(p.clone(), pg),
+            || DataKey::PatientOrdersHead(p.clone()),
+            || total,
+            page,
+        ))
     }
 
-    /// Get all orders by a provider
+    /// Get a page of order IDs for a provider.
+    ///
+    /// See `get_patient_orders` for pagination semantics.
     pub fn get_provider_orders(
         env: Env,
         provider_id: Address,
         requester: Address,
-    ) -> Result<Vec<u64>, Error> {
+        page: u32,
+    ) -> Result<PageResult, Error> {
         requester.require_auth();
         if requester != provider_id {
             return Err(Error::UnauthorizedAccess);
         }
-        let key = DataKey::ProviderOrders(provider_id);
-        Ok(env
-            .storage()
-            .persistent()
-            .get(&key)
-            .unwrap_or(Vec::new(&env)))
+        let prov = provider_id.clone();
+        let total_key = DataKey::ProviderOrdersTotal(provider_id.clone());
+        let total: u32 = env.storage().persistent().get(&total_key).unwrap_or(0);
+        Ok(pagination::get_paged(
+            &env,
+            |pg| DataKey::ProviderOrdersPage(prov.clone(), pg),
+            || DataKey::ProviderOrdersHead(prov.clone()),
+            || total,
+            page,
+        ))
+    }
+
+    /// Maximum items per page (re-exported for callers).
+    pub fn max_page_size(_env: Env) -> u32 {
+        MAX_PAGE_SIZE
     }
 
     fn load_order_for_read(
