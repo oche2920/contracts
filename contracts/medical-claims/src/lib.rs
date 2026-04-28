@@ -223,12 +223,13 @@ impl MedicalClaimsSystem {
         env: Env,
         claim_id: u64,
         insurer_id: Address,
-        _payment_amount: i128,
+        payment_amount: i128,
         payment_date: u64,
         payment_reference: String,
     ) -> Result<(), Error> {
         insurer_id.require_auth();
         Self::require_insurer(&env, &insurer_id)?;
+        let mut claim = Self::load_claim(&env, claim_id)?;
 
         if payment_amount <= 0 || payment_reference.is_empty() {
             return Err(Error::InvalidAmount);

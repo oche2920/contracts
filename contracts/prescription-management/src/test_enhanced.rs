@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, Address, Env, String, Symbol, Vec, BytesN};
+use soroban_sdk::{Address, BytesN, Env, String, Symbol};
 
 #[test]
 fn test_prescription_lifecycle_invariants() {
@@ -23,12 +23,12 @@ fn test_prescription_lifecycle_invariants() {
         quantity: 30,
         days_supply: 30,
         refills_allowed: 3,
-        instructions_hash: BytesN::from_array(&[0; 32]),
+        instructions_hash: BytesN::from_array(&env, &[0; 32]),
         is_controlled: false,
         schedule: None,
         valid_until: env.ledger().timestamp() + (30 * 24 * 60 * 60),
         substitution_allowed: true,
-        pharmacy_id: Some(pharmacy),
+        pharmacy_id: Some(pharmacy.clone()),
     };
 
     let prescription_id = client.issue_prescription(&provider, &patient, &req);
@@ -56,7 +56,9 @@ fn test_prescription_lifecycle_invariants() {
     client.dispense_prescription(&dispense_req2, &pharmacy);
 
     // Verify prescription is fully dispensed
-    let prescription: Prescription = env.storage().persistent().get(&prescription_id).unwrap();
+    let prescription: Prescription = env.as_contract(&contract_id, || {
+        env.storage().persistent().get(&prescription_id).unwrap()
+    });
     assert_eq!(prescription.quantity_dispensed, 30);
     assert!(matches!(prescription.status, PrescriptionStatus::Dispensed));
 }
@@ -83,12 +85,12 @@ fn test_prescription_transfer_ownership_verification() {
         quantity: 30,
         days_supply: 30,
         refills_allowed: 2,
-        instructions_hash: BytesN::from_array(&[0; 32]),
+        instructions_hash: BytesN::from_array(&env, &[0; 32]),
         is_controlled: false,
         schedule: None,
         valid_until: env.ledger().timestamp() + (30 * 24 * 60 * 60),
         substitution_allowed: true,
-        pharmacy_id: Some(pharmacy1),
+        pharmacy_id: Some(pharmacy1.clone()),
     };
 
     let prescription_id = client.issue_prescription(&provider, &patient, &req);
@@ -96,7 +98,7 @@ fn test_prescription_transfer_ownership_verification() {
     // Test successful transfer
     let transfer_req = TransferRequest {
         prescription_id,
-        to_pharmacy: pharmacy2,
+        to_pharmacy: pharmacy2.clone(),
         transfer_reason: String::from_str(&env, "Patient relocation"),
         urgency: Symbol::new(&env, "normal"),
     };
@@ -138,12 +140,12 @@ fn test_controlled_substance_transfer_limits() {
         quantity: 30,
         days_supply: 15,
         refills_allowed: 1,
-        instructions_hash: BytesN::from_array(&[0; 32]),
+        instructions_hash: BytesN::from_array(&env, &[0; 32]),
         is_controlled: true,
         schedule: Some(2), // Schedule II
         valid_until: env.ledger().timestamp() + (30 * 24 * 60 * 60),
         substitution_allowed: false,
-        pharmacy_id: Some(pharmacy1),
+        pharmacy_id: Some(pharmacy1.clone()),
     };
 
     let prescription_id = client.issue_prescription(&provider, &patient, &req);
@@ -151,12 +153,13 @@ fn test_controlled_substance_transfer_limits() {
     // First transfer should succeed
     let transfer_req1 = TransferRequest {
         prescription_id,
-        to_pharmacy: pharmacy2,
+        to_pharmacy: pharmacy2.clone(),
         transfer_reason: String::from_str(&env, "Patient request"),
         urgency: Symbol::new(&env, "normal"),
     };
 
     client.transfer_prescription(&transfer_req1, &pharmacy1);
+    client.accept_transfer(&prescription_id, &pharmacy2);
 
     // Second transfer should fail for controlled substance
     let transfer_req2 = TransferRequest {
@@ -190,12 +193,12 @@ fn test_refill_lifecycle_management() {
         quantity: 30,
         days_supply: 30,
         refills_allowed: 3,
-        instructions_hash: BytesN::from_array(&[0; 32]),
+        instructions_hash: BytesN::from_array(&env, &[0; 32]),
         is_controlled: false,
         schedule: None,
         valid_until: env.ledger().timestamp() + (90 * 24 * 60 * 60),
         substitution_allowed: true,
-        pharmacy_id: Some(pharmacy),
+        pharmacy_id: Some(pharmacy.clone()),
     };
 
     let prescription_id = client.issue_prescription(&provider, &patient, &req);
@@ -215,7 +218,9 @@ fn test_refill_lifecycle_management() {
     client.refill_prescription(&prescription_id, &pharmacy, &provider);
 
     // Verify refill state
-    let prescription: Prescription = env.storage().persistent().get(&prescription_id).unwrap();
+    let prescription: Prescription = env.as_contract(&contract_id, || {
+        env.storage().persistent().get(&prescription_id).unwrap()
+    });
     assert_eq!(prescription.refills_remaining, 2);
     assert_eq!(prescription.refills_used, 1);
     assert_eq!(prescription.quantity_dispensed, 0);
@@ -249,12 +254,12 @@ fn test_prescription_cancellation_safety() {
         quantity: 30,
         days_supply: 30,
         refills_allowed: 2,
-        instructions_hash: BytesN::from_array(&[0; 32]),
+        instructions_hash: BytesN::from_array(&env, &[0; 32]),
         is_controlled: false,
         schedule: None,
         valid_until: env.ledger().timestamp() + (30 * 24 * 60 * 60),
         substitution_allowed: true,
-        pharmacy_id: Some(pharmacy),
+        pharmacy_id: Some(pharmacy.clone()),
     };
 
     let prescription_id = client.issue_prescription(&provider, &patient, &req);
@@ -271,12 +276,22 @@ fn test_prescription_cancellation_safety() {
     client.dispense_prescription(&dispense_req, &pharmacy);
 
     // Test normal cancellation fails after partial dispense
-    let result = client.try_cancel_prescription(&prescription_id, &provider, String::from_str(&env, "Change of mind"));
+    let result = client.try_cancel_prescription(
+        &prescription_id,
+        &provider,
+        &String::from_str(&env, "Change of mind"),
+    );
     assert_eq!(result, Err(Ok(Error::InvalidStatusTransition)));
 
     // Test safety-related cancellation succeeds
-    client.cancel_prescription(&prescription_id, &provider, String::from_str(&env, "safety_concern"));
+    client.cancel_prescription(
+        &prescription_id,
+        &provider,
+        &String::from_str(&env, "safety_concern"),
+    );
 
-    let prescription: Prescription = env.storage().persistent().get(&prescription_id).unwrap();
+    let prescription: Prescription = env.as_contract(&contract_id, || {
+        env.storage().persistent().get(&prescription_id).unwrap()
+    });
     assert!(matches!(prescription.status, PrescriptionStatus::Cancelled));
 }

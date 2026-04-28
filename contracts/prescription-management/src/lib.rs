@@ -2,7 +2,6 @@
 
 use soroban_sdk::{
     Address, BytesN, Env, String, Symbol, Vec, contract, contracterror, contractimpl, contracttype,
-    panic_with_error,
 };
 
 #[contracterror]
@@ -25,6 +24,10 @@ pub enum Error {
     TransferChainBroken = 14,
     MissingTransferReason = 15,
     ControlledSubstanceViolation = 16,
+    RegistryGoverned = 17,
+    HighImpactRequiresProposal = 18,
+    ProposalNotFound = 19,
+    ProposalAlreadyFinalized = 20,
 }
 
 #[contracttype]
@@ -73,15 +76,50 @@ pub struct InteractionOverride {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RegistryProposalAction {
+    Medication(Medication),
+    Interaction(Interaction),
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RegistryProposal {
+    pub id: u64,
+    pub proposer: Address,
+    pub action: RegistryProposalAction,
+    pub created_at: u64,
+    pub approved: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogSnapshot {
+    pub version: u64,
+    pub created_by: Address,
+    pub created_at: u64,
+    pub medication_count: u32,
+    pub interaction_count: u32,
+}
+
+#[contracttype]
 pub enum DataKey {
     Medication(String),
+    MedicationCatalog,
     InteractionCounter,
     InteractionById(u64),
     InteractionPair(String, String),
+    InteractionCatalog,
     PatientAllergies(Address),
     PatientConditions(Address),
     MedicationContraindications(String),
     InteractionOverride(u64, Address),
+    RegistryAdmin,
+    RegistryWriter(Address),
+    RegistryProposalCounter,
+    RegistryProposal(u64),
+    SnapshotCounter,
+    CatalogSnapshot(u64),
 }
 
 #[contracttype]
@@ -226,7 +264,12 @@ impl PrescriptionContract {
             .ok_or(Error::NotFound)?;
 
         // Validate prescription is in dispensible state
-        if !matches!(p.status, PrescriptionStatus::Issued | PrescriptionStatus::Active | PrescriptionStatus::PartiallyDispensed) {
+        if !matches!(
+            p.status,
+            PrescriptionStatus::Issued
+                | PrescriptionStatus::Active
+                | PrescriptionStatus::PartiallyDispensed
+        ) {
             return Err(Error::InvalidStatusTransition);
         }
 
@@ -236,13 +279,14 @@ impl PrescriptionContract {
         }
 
         // Validate pharmacy authorization
-        if let Some(current_pharmacy) = p.current_pharmacy {
-            if current_pharmacy != pharmacy_id {
+        if let Some(ref current_pharmacy) = p.current_pharmacy {
+            if *current_pharmacy != pharmacy_id {
+            if current_pharmacy != &pharmacy_id {
                 return Err(Error::PharmacyNotAuthorized);
             }
         } else {
             // First dispense sets the pharmacy
-            p.current_pharmacy = Some(pharmacy_id);
+            p.current_pharmacy = Some(pharmacy_id.clone());
         }
 
         // Validate quantity constraints
@@ -309,7 +353,12 @@ impl PrescriptionContract {
         }
 
         // Validate prescription is transferable
-        if !matches!(p.status, PrescriptionStatus::Issued | PrescriptionStatus::Active | PrescriptionStatus::PartiallyDispensed) {
+        if !matches!(
+            p.status,
+            PrescriptionStatus::Issued
+                | PrescriptionStatus::Active
+                | PrescriptionStatus::PartiallyDispensed
+        ) {
             return Err(Error::InvalidStatusTransition);
         }
 
@@ -343,7 +392,12 @@ impl PrescriptionContract {
         // Emit transfer event
         env.events().publish(
             (Symbol::new(&env, "prescription_transferred"),),
-            (req.prescription_id, from_pharmacy, req.to_pharmacy, req.transfer_reason),
+            (
+                req.prescription_id,
+                from_pharmacy,
+                req.to_pharmacy,
+                req.transfer_reason,
+            ),
         );
 
         Ok(())
@@ -363,8 +417,8 @@ impl PrescriptionContract {
             .ok_or(Error::NotFound)?;
 
         // Verify pharmacy is the destination
-        if let Some(current_pharmacy) = p.current_pharmacy {
-            if current_pharmacy != pharmacy_id {
+        if let Some(ref current_pharmacy) = p.current_pharmacy {
+            if current_pharmacy != &pharmacy_id {
                 return Err(Error::PharmacyNotAuthorized);
             }
         } else {
@@ -397,21 +451,63 @@ impl PrescriptionContract {
         drug_class: Symbol,
         interaction_profile_hash: BytesN<32>,
     ) -> Result<(), Error> {
-        let key = DataKey::Medication(ndc_code.clone());
-        if env.storage().persistent().has(&key) {
+        if is_registry_governed(&env) {
+            return Err(Error::RegistryGoverned);
+        }
+        put_medication(
+            &env,
+            Medication {
+                ndc_code,
+                generic_name,
+                brand_names,
+                drug_class,
+                interaction_profile_hash,
+            },
+        )
+    }
+
+    pub fn initialize_registry_governance(env: Env, admin: Address) -> Result<(), Error> {
+        admin.require_auth();
+        if is_registry_governed(&env) {
             return Err(Error::AlreadyExists);
         }
-
-        let medication = Medication {
-            ndc_code,
-            generic_name,
-            brand_names,
-            drug_class,
-            interaction_profile_hash,
-        };
-
-        env.storage().persistent().set(&key, &medication);
+        env.storage()
+            .persistent()
+            .set(&DataKey::RegistryAdmin, &admin);
+        env.storage()
+            .persistent()
+            .set(&DataKey::RegistryWriter(admin.clone()), &true);
         Ok(())
+    }
+
+    pub fn add_registry_writer(env: Env, admin: Address, writer: Address) -> Result<(), Error> {
+        require_registry_admin(&env, &admin)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::RegistryWriter(writer), &true);
+        Ok(())
+    }
+
+    pub fn register_medication_by(
+        env: Env,
+        writer: Address,
+        ndc_code: String,
+        generic_name: String,
+        brand_names: Vec<String>,
+        drug_class: Symbol,
+        interaction_profile_hash: BytesN<32>,
+    ) -> Result<(), Error> {
+        require_registry_writer(&env, &writer)?;
+        put_medication(
+            &env,
+            Medication {
+                ndc_code,
+                generic_name,
+                brand_names,
+                drug_class,
+                interaction_profile_hash,
+            },
+        )
     }
 
     pub fn add_interaction(
@@ -423,55 +519,175 @@ impl PrescriptionContract {
         clinical_effects: String,
         management_strategy: String,
     ) -> Result<(), Error> {
-        if !is_valid_severity(&env, &severity) {
-            return Err(Error::InvalidSeverity);
+        if is_registry_governed(&env) {
+            return Err(Error::RegistryGoverned);
         }
-
-        let med1_key = DataKey::Medication(drug1_ndc.clone());
-        let med2_key = DataKey::Medication(drug2_ndc.clone());
-        if !env.storage().persistent().has(&med1_key) || !env.storage().persistent().has(&med2_key)
-        {
-            return Err(Error::NotFound);
-        }
-
-        let pair_key = DataKey::InteractionPair(drug1_ndc.clone(), drug2_ndc.clone());
-        if env.storage().persistent().has(&pair_key) {
-            return Err(Error::AlreadyExists);
-        }
-
-        let interaction_id = env
-            .storage()
-            .instance()
-            .get::<_, u64>(&DataKey::InteractionCounter)
-            .unwrap_or(0)
-            + 1;
-
-        let interaction = Interaction {
-            id: interaction_id,
-            drug1_ndc: drug1_ndc.clone(),
-            drug2_ndc: drug2_ndc.clone(),
+        put_interaction(
+            &env,
+            drug1_ndc,
+            drug2_ndc,
             severity,
             interaction_type,
             clinical_effects,
             management_strategy,
-        };
+        )
+    }
 
+    pub fn add_interaction_by(
+        env: Env,
+        writer: Address,
+        drug1_ndc: String,
+        drug2_ndc: String,
+        severity: Symbol,
+        interaction_type: Symbol,
+        clinical_effects: String,
+        management_strategy: String,
+    ) -> Result<(), Error> {
+        require_registry_writer(&env, &writer)?;
+        if requires_documentation(&env, &severity) {
+            return Err(Error::HighImpactRequiresProposal);
+        }
+        put_interaction(
+            &env,
+            drug1_ndc,
+            drug2_ndc,
+            severity,
+            interaction_type,
+            clinical_effects,
+            management_strategy,
+        )
+    }
+
+    pub fn propose_interaction_update(
+        env: Env,
+        writer: Address,
+        drug1_ndc: String,
+        drug2_ndc: String,
+        severity: Symbol,
+        interaction_type: Symbol,
+        clinical_effects: String,
+        management_strategy: String,
+    ) -> Result<u64, Error> {
+        require_registry_writer(&env, &writer)?;
+        if !is_valid_severity(&env, &severity) {
+            return Err(Error::InvalidSeverity);
+        }
+        if !medications_exist(&env, &drug1_ndc, &drug2_ndc) {
+            return Err(Error::NotFound);
+        }
+        if env.storage().persistent().has(&DataKey::InteractionPair(
+            drug1_ndc.clone(),
+            drug2_ndc.clone(),
+        )) {
+            return Err(Error::AlreadyExists);
+        }
+
+        create_registry_proposal(
+            &env,
+            writer,
+            RegistryProposalAction::Interaction(Interaction {
+                id: 0,
+                drug1_ndc: drug1_ndc.clone(),
+                drug2_ndc: drug2_ndc.clone(),
+                severity,
+                interaction_type,
+                clinical_effects,
+                management_strategy,
+            }),
+        )
+    }
+
+    pub fn propose_medication_update(
+        env: Env,
+        writer: Address,
+        ndc_code: String,
+        generic_name: String,
+        brand_names: Vec<String>,
+        drug_class: Symbol,
+        interaction_profile_hash: BytesN<32>,
+    ) -> Result<u64, Error> {
+        require_registry_writer(&env, &writer)?;
+        let key = DataKey::Medication(ndc_code.clone());
+        if env.storage().persistent().has(&key) {
+            return Err(Error::AlreadyExists);
+        }
+        create_registry_proposal(
+            &env,
+            writer,
+            RegistryProposalAction::Medication(Medication {
+                ndc_code,
+                generic_name,
+                brand_names,
+                drug_class,
+                interaction_profile_hash,
+            }),
+        )
+    }
+
+    pub fn approve_registry_proposal(
+        env: Env,
+        admin: Address,
+        proposal_id: u64,
+    ) -> Result<(), Error> {
+        require_registry_admin(&env, &admin)?;
+        let mut proposal: RegistryProposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::RegistryProposal(proposal_id))
+            .ok_or(Error::ProposalNotFound)?;
+        if proposal.approved {
+            return Err(Error::ProposalAlreadyFinalized);
+        }
+        match proposal.action.clone() {
+            RegistryProposalAction::Medication(medication) => put_medication(&env, medication)?,
+            RegistryProposalAction::Interaction(interaction) => put_interaction(
+                &env,
+                interaction.drug1_ndc,
+                interaction.drug2_ndc,
+                interaction.severity,
+                interaction.interaction_type,
+                interaction.clinical_effects,
+                interaction.management_strategy,
+            )?,
+        }
+        proposal.approved = true;
         env.storage()
             .persistent()
-            .set(&DataKey::InteractionById(interaction_id), &interaction);
-        env.storage().persistent().set(
-            &DataKey::InteractionPair(drug1_ndc.clone(), drug2_ndc.clone()),
-            &interaction_id,
-        );
-        env.storage().persistent().set(
-            &DataKey::InteractionPair(drug2_ndc, drug1_ndc),
-            &interaction_id,
-        );
+            .set(&DataKey::RegistryProposal(proposal_id), &proposal);
+        Ok(())
+    }
+
+    pub fn create_catalog_snapshot(env: Env, admin: Address) -> Result<u64, Error> {
+        require_registry_admin(&env, &admin)?;
+        let version = env
+            .storage()
+            .instance()
+            .get::<_, u64>(&DataKey::SnapshotCounter)
+            .unwrap_or(0)
+            + 1;
+        let medication_count = medication_catalog_len(&env);
+        let interaction_count = interaction_catalog_len(&env);
+        let snapshot = CatalogSnapshot {
+            version,
+            created_by: admin,
+            created_at: env.ledger().timestamp(),
+            medication_count,
+            interaction_count,
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::CatalogSnapshot(version), &snapshot);
         env.storage()
             .instance()
-            .set(&DataKey::InteractionCounter, &interaction_id);
+            .set(&DataKey::SnapshotCounter, &version);
+        Ok(version)
+    }
 
-        Ok(())
+    pub fn get_catalog_snapshot(env: Env, version: u64) -> Result<CatalogSnapshot, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::CatalogSnapshot(version))
+            .ok_or(Error::NotFound)
     }
 
     pub fn check_interactions(
@@ -707,7 +923,12 @@ impl PrescriptionContract {
         }
 
         // Validate prescription is in refillable state
-        if !matches!(p.status, PrescriptionStatus::Active | PrescriptionStatus::PartiallyDispensed | PrescriptionStatus::Dispensed) {
+        if !matches!(
+            p.status,
+            PrescriptionStatus::Active
+                | PrescriptionStatus::PartiallyDispensed
+                | PrescriptionStatus::Dispensed
+        ) {
             return Err(Error::InvalidStatusTransition);
         }
 
@@ -717,8 +938,8 @@ impl PrescriptionContract {
         }
 
         // Validate pharmacy authorization
-        if let Some(current_pharmacy) = p.current_pharmacy {
-            if current_pharmacy != pharmacy_id {
+        if let Some(ref current_pharmacy) = p.current_pharmacy {
+            if current_pharmacy != &pharmacy_id {
                 return Err(Error::PharmacyNotAuthorized);
             }
         } else {
@@ -748,7 +969,12 @@ impl PrescriptionContract {
         // Emit refill event
         env.events().publish(
             (Symbol::new(&env, "prescription_refilled"),),
-            (prescription_id, pharmacy_id, provider_id, p.refills_remaining),
+            (
+                prescription_id,
+                pharmacy_id,
+                provider_id,
+                p.refills_remaining,
+            ),
         );
 
         Ok(())
@@ -774,13 +1000,20 @@ impl PrescriptionContract {
         }
 
         // Only active or issued prescriptions can be cancelled
-        if !matches!(p.status, PrescriptionStatus::Issued | PrescriptionStatus::Active | PrescriptionStatus::PartiallyDispensed) {
+        if !matches!(
+            p.status,
+            PrescriptionStatus::Issued
+                | PrescriptionStatus::Active
+                | PrescriptionStatus::PartiallyDispensed
+        ) {
             return Err(Error::InvalidStatusTransition);
         }
 
         // Cannot cancel if already partially dispensed (unless for safety reasons)
         if matches!(p.status, PrescriptionStatus::PartiallyDispensed) && p.quantity_dispensed > 0 {
-            if reason != String::from_str(&env, "safety_concern") && reason != String::from_str(&env, "adverse_reaction") {
+            if reason != String::from_str(&env, "safety_concern")
+                && reason != String::from_str(&env, "adverse_reaction")
+            {
                 return Err(Error::InvalidStatusTransition);
             }
         }
@@ -796,6 +1029,181 @@ impl PrescriptionContract {
 
         Ok(())
     }
+}
+
+fn is_registry_governed(env: &Env) -> bool {
+    env.storage().persistent().has(&DataKey::RegistryAdmin)
+}
+
+fn require_registry_admin(env: &Env, admin: &Address) -> Result<(), Error> {
+    admin.require_auth();
+    let configured_admin: Address = env
+        .storage()
+        .persistent()
+        .get(&DataKey::RegistryAdmin)
+        .ok_or(Error::Unauthorized)?;
+    if configured_admin != *admin {
+        return Err(Error::Unauthorized);
+    }
+    Ok(())
+}
+
+fn require_registry_writer(env: &Env, writer: &Address) -> Result<(), Error> {
+    writer.require_auth();
+    if !is_registry_governed(env) {
+        return Err(Error::Unauthorized);
+    }
+    let authorized = env
+        .storage()
+        .persistent()
+        .get::<_, bool>(&DataKey::RegistryWriter(writer.clone()))
+        .unwrap_or(false);
+    if !authorized {
+        return Err(Error::Unauthorized);
+    }
+    Ok(())
+}
+
+fn put_medication(env: &Env, medication: Medication) -> Result<(), Error> {
+    let key = DataKey::Medication(medication.ndc_code.clone());
+    if env.storage().persistent().has(&key) {
+        return Err(Error::AlreadyExists);
+    }
+
+    let mut catalog: Vec<String> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::MedicationCatalog)
+        .unwrap_or(Vec::new(env));
+    catalog.push_back(medication.ndc_code.clone());
+
+    env.storage().persistent().set(&key, &medication);
+    env.storage()
+        .persistent()
+        .set(&DataKey::MedicationCatalog, &catalog);
+    Ok(())
+}
+
+fn put_interaction(
+    env: &Env,
+    drug1_ndc: String,
+    drug2_ndc: String,
+    severity: Symbol,
+    interaction_type: Symbol,
+    clinical_effects: String,
+    management_strategy: String,
+) -> Result<(), Error> {
+    if !is_valid_severity(env, &severity) {
+        return Err(Error::InvalidSeverity);
+    }
+
+    if !medications_exist(env, &drug1_ndc, &drug2_ndc) {
+        return Err(Error::NotFound);
+    }
+
+    let pair_key = DataKey::InteractionPair(drug1_ndc.clone(), drug2_ndc.clone());
+    if env.storage().persistent().has(&pair_key) {
+        return Err(Error::AlreadyExists);
+    }
+
+    let interaction_id = env
+        .storage()
+        .instance()
+        .get::<_, u64>(&DataKey::InteractionCounter)
+        .unwrap_or(0)
+        + 1;
+
+    let interaction = Interaction {
+        id: interaction_id,
+        drug1_ndc: drug1_ndc.clone(),
+        drug2_ndc: drug2_ndc.clone(),
+        severity,
+        interaction_type,
+        clinical_effects,
+        management_strategy,
+    };
+
+    let mut catalog: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::InteractionCatalog)
+        .unwrap_or(Vec::new(env));
+    catalog.push_back(interaction_id);
+
+    env.storage()
+        .persistent()
+        .set(&DataKey::InteractionById(interaction_id), &interaction);
+    env.storage().persistent().set(
+        &DataKey::InteractionPair(drug1_ndc.clone(), drug2_ndc.clone()),
+        &interaction_id,
+    );
+    env.storage().persistent().set(
+        &DataKey::InteractionPair(drug2_ndc, drug1_ndc),
+        &interaction_id,
+    );
+    env.storage()
+        .persistent()
+        .set(&DataKey::InteractionCatalog, &catalog);
+    env.storage()
+        .instance()
+        .set(&DataKey::InteractionCounter, &interaction_id);
+
+    Ok(())
+}
+
+fn medications_exist(env: &Env, drug1_ndc: &String, drug2_ndc: &String) -> bool {
+    env.storage()
+        .persistent()
+        .has(&DataKey::Medication(drug1_ndc.clone()))
+        && env
+            .storage()
+            .persistent()
+            .has(&DataKey::Medication(drug2_ndc.clone()))
+}
+
+fn create_registry_proposal(
+    env: &Env,
+    proposer: Address,
+    action: RegistryProposalAction,
+) -> Result<u64, Error> {
+    let id = env
+        .storage()
+        .instance()
+        .get::<_, u64>(&DataKey::RegistryProposalCounter)
+        .unwrap_or(0)
+        + 1;
+    let proposal = RegistryProposal {
+        id,
+        proposer,
+        action,
+        created_at: env.ledger().timestamp(),
+        approved: false,
+    };
+    env.storage()
+        .persistent()
+        .set(&DataKey::RegistryProposal(id), &proposal);
+    env.storage()
+        .instance()
+        .set(&DataKey::RegistryProposalCounter, &id);
+    Ok(id)
+}
+
+fn medication_catalog_len(env: &Env) -> u32 {
+    let catalog: Vec<String> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::MedicationCatalog)
+        .unwrap_or(Vec::new(env));
+    catalog.len()
+}
+
+fn interaction_catalog_len(env: &Env) -> u32 {
+    let catalog: Vec<u64> = env
+        .storage()
+        .persistent()
+        .get(&DataKey::InteractionCatalog)
+        .unwrap_or(Vec::new(env));
+    catalog.len()
 }
 
 fn is_valid_severity(env: &Env, severity: &Symbol) -> bool {

@@ -3,7 +3,10 @@
 
 use crate::contract::{TelemedicineContract, TelemedicineContractClient};
 use crate::types::PrescriptionRequest;
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol, Vec};
+use soroban_sdk::{
+    testutils::{Address as _, Ledger as _},
+    Address, BytesN, Env, String, Symbol, Vec,
+};
 
 #[test]
 fn test_telemedicine_lifecycle() {
@@ -48,7 +51,11 @@ fn test_telemedicine_lifecycle() {
         &session_start_time,
         &String::from_str(&env, "NY"),
     );
-    assert_eq!(token, String::from_str(&env, "SESSION_TOKEN_123"));
+    assert_ne!(token, BytesN::from_array(&env, &[0; 32]));
+    client.validate_session_token(&visit_id, &provider_id, &token);
+
+    let replay = client.try_validate_session_token(&visit_id, &provider_id, &token);
+    assert_eq!(replay, Err(Ok(crate::types::Error::SessionAlreadyUsed)));
 
     // 4. Record technical issue
     client.record_technical_issue(
@@ -144,4 +151,70 @@ fn test_auth_and_eligibility_failures() {
     let rx_res =
         client.try_prescribe_during_visit(&visit_id, &provider_id, &wrong_patient, &rx_request);
     assert!(rx_res.is_err());
+}
+
+#[test]
+fn test_session_tokens_are_unique_bound_expiring_and_non_replayable() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register_contract(None, TelemedicineContract);
+    let client = TelemedicineContractClient::new(&env, &contract_id);
+
+    let patient_id = Address::generate(&env);
+    let provider_id = Address::generate(&env);
+    let other_provider = Address::generate(&env);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1_700_000_000;
+    });
+
+    let visit_one = client.schedule_virtual_visit(
+        &patient_id,
+        &provider_id,
+        &1_700_000_100,
+        &Symbol::new(&env, "Consult"),
+        &30,
+        &Symbol::new(&env, "ZoomHD"),
+        &true,
+    );
+    let visit_two = client.schedule_virtual_visit(
+        &patient_id,
+        &provider_id,
+        &1_700_000_200,
+        &Symbol::new(&env, "Follow"),
+        &30,
+        &Symbol::new(&env, "ZoomHD"),
+        &true,
+    );
+
+    let token_one = client.start_virtual_session(
+        &visit_one,
+        &provider_id,
+        &1_700_000_100,
+        &String::from_str(&env, "NY"),
+    );
+    let token_two = client.start_virtual_session(
+        &visit_two,
+        &provider_id,
+        &1_700_000_200,
+        &String::from_str(&env, "NY"),
+    );
+    assert_ne!(token_one, token_two);
+
+    let wrong_caller = client.try_validate_session_token(&visit_one, &other_provider, &token_one);
+    assert_eq!(
+        wrong_caller,
+        Err(Ok(crate::types::Error::InvalidSessionToken))
+    );
+
+    client.validate_session_token(&visit_one, &provider_id, &token_one);
+    let replay = client.try_validate_session_token(&visit_one, &provider_id, &token_one);
+    assert_eq!(replay, Err(Ok(crate::types::Error::SessionAlreadyUsed)));
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1_700_004_000;
+    });
+    let expired = client.try_validate_session_token(&visit_two, &provider_id, &token_two);
+    assert_eq!(expired, Err(Ok(crate::types::Error::SessionExpired)));
 }

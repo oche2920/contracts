@@ -3,51 +3,66 @@
 use super::*;
 use soroban_sdk::{
     testutils::{Address as _, MockAuth, MockAuthInvoke},
-    Address, Bytes, Env, IntoVal, String,
+    xdr::ToXdr,
+    Address, Bytes, BytesN, Env, IntoVal, String,
 };
+
+fn setup() -> (Env, AccessControlClient<'static>) {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(AccessControl, ());
+    let client = AccessControlClient::new(&env, &contract_id);
+    (env, client)
+}
+
+fn register_two(
+    env: &Env,
+    client: &AccessControlClient,
+    admin: &Address,
+) -> (Address, Address) {
+    client.initialize(admin);
+    let hospital = Address::generate(env);
+    let doctor = Address::generate(env);
+    client.register_entity(
+        &hospital,
+        &EntityType::Hospital,
+        &String::from_str(env, "City Hospital"),
+        &String::from_str(env, "metadata"),
+    );
+    client.register_entity(
+        &doctor,
+        &EntityType::Doctor,
+        &String::from_str(env, "Dr. Smith"),
+        &String::from_str(env, "metadata"),
+    );
+    (hospital, doctor)
+}
 
 #[test]
 fn test_initialize() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin);
 }
 
 #[test]
 fn test_double_initialize() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin);
-
     let result = client.try_initialize(&admin);
     assert_eq!(result, Err(Ok(ContractError::AlreadyInitialized)));
 }
 
 #[test]
 fn test_register_entity() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin);
 
     let hospital = Address::generate(&env);
     let name = String::from_str(&env, "City Hospital");
     let metadata = String::from_str(&env, "General Hospital");
-
     client.register_entity(&hospital, &EntityType::Hospital, &name, &metadata);
 
     let entity = client.get_entity(&hospital);
@@ -58,203 +73,238 @@ fn test_register_entity() {
 
 #[test]
 fn test_duplicate_registration() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin);
 
     let hospital = Address::generate(&env);
     let name = String::from_str(&env, "City Hospital");
     let metadata = String::from_str(&env, "General Hospital");
-
     client.register_entity(&hospital, &EntityType::Hospital, &name, &metadata);
 
     let result = client.try_register_entity(&hospital, &EntityType::Hospital, &name, &metadata);
     assert_eq!(result, Err(Ok(ContractError::EntityAlreadyRegistered)));
 }
 
+// ---------------------------------------------------------------------------
+// #220: composite uniqueness — same (grantor, grantee, resource) is rejected
+// ---------------------------------------------------------------------------
 #[test]
 fn test_grant_access() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
-    client.initialize(&admin);
+    let (hospital, doctor) = register_two(&env, &client, &admin);
 
-    // Register a hospital and a doctor
-    let hospital = Address::generate(&env);
-    let doctor = Address::generate(&env);
-
-    client.register_entity(
-        &hospital,
-        &EntityType::Hospital,
-        &String::from_str(&env, "City Hospital"),
-        &String::from_str(&env, "metadata"),
-    );
-
-    client.register_entity(
-        &doctor,
-        &EntityType::Doctor,
-        &String::from_str(&env, "Dr. Smith"),
-        &String::from_str(&env, "metadata"),
-    );
-
-    // Hospital grants access to doctor for patient records
     let resource_id = String::from_str(&env, "patient-123-records");
-    client.grant_access(&hospital, &doctor, &resource_id, &0);
+    let op_id = client.grant_access(&hospital, &doctor, &resource_id, &0, &None);
+    assert!(op_id > 0);
 
-    // Check that doctor has access
     assert!(client.check_access(&doctor, &resource_id));
-
-    // Check authorized parties
     let authorized = client.get_authorized_parties(&resource_id);
     assert_eq!(authorized.len(), 1);
 }
 
 #[test]
-fn test_revoke_access() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+fn test_grant_access_already_granted() {
+    let (env, client) = setup();
     let admin = Address::generate(&env);
-    client.initialize(&admin);
+    let (hospital, doctor) = register_two(&env, &client, &admin);
 
-    let hospital = Address::generate(&env);
-    let doctor = Address::generate(&env);
+    let resource = String::from_str(&env, "patient-records");
+    client.grant_access(&hospital, &doctor, &resource, &0, &None);
 
-    client.register_entity(
-        &hospital,
-        &EntityType::Hospital,
-        &String::from_str(&env, "City Hospital"),
-        &String::from_str(&env, "metadata"),
-    );
-
-    client.register_entity(
-        &doctor,
-        &EntityType::Doctor,
-        &String::from_str(&env, "Dr. Smith"),
-        &String::from_str(&env, "metadata"),
-    );
-
-    let resource_id = String::from_str(&env, "patient-123-records");
-    client.grant_access(&hospital, &doctor, &resource_id, &0);
-
-    // Verify access exists
-    assert!(client.check_access(&doctor, &resource_id));
-
-    // Revoke access
-    client.revoke_access(&hospital, &doctor, &resource_id);
-
-    // Verify access is revoked
-    assert!(!client.check_access(&doctor, &resource_id));
-
-    // Verify authorized parties is empty
-    let authorized = client.get_authorized_parties(&resource_id);
-    assert_eq!(authorized.len(), 0);
+    // Same (grantor, grantee, resource) must be rejected
+    let result = client.try_grant_access(&hospital, &doctor, &resource, &0, &None);
+    assert_eq!(result, Err(Ok(ContractError::AccessAlreadyGranted)));
 }
 
+// ---------------------------------------------------------------------------
+// #222: op_id is monotonically increasing and included in events
+// ---------------------------------------------------------------------------
+#[test]
+fn test_op_id_increments() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let (hospital, doctor) = register_two(&env, &client, &admin);
+
+    let r1 = String::from_str(&env, "resource-1");
+    let r2 = String::from_str(&env, "resource-2");
+
+    let op1 = client.grant_access(&hospital, &doctor, &r1, &0, &None);
+    let op2 = client.grant_access(&hospital, &doctor, &r2, &0, &None);
+    assert!(op2 > op1);
+}
+
+#[test]
+fn test_revoke_returns_op_id() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let (hospital, doctor) = register_two(&env, &client, &admin);
+
+    let resource = String::from_str(&env, "patient-records");
+    let grant_op = client.grant_access(&hospital, &doctor, &resource, &0, &None);
+    let revoke_op = client.revoke_access(&hospital, &doctor, &resource);
+    assert!(revoke_op > grant_op);
+}
+
+// ---------------------------------------------------------------------------
+// #224: revocation is atomic — both AccessList and ResourceAccess are cleared
+// ---------------------------------------------------------------------------
+#[test]
+fn test_revoke_access_clears_both_indexes() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let (hospital, doctor) = register_two(&env, &client, &admin);
+
+    let resource_id = String::from_str(&env, "patient-123-records");
+    client.grant_access(&hospital, &doctor, &resource_id, &0, &None);
+
+    assert!(client.check_access(&doctor, &resource_id));
+    assert_eq!(client.get_authorized_parties(&resource_id).len(), 1);
+
+    client.revoke_access(&hospital, &doctor, &resource_id);
+
+    // Both indexes must be empty after revocation
+    assert!(!client.check_access(&doctor, &resource_id));
+    assert_eq!(client.get_authorized_parties(&resource_id).len(), 0);
+}
+
+#[test]
+fn test_revoke_access_re_grant_allowed_after_revoke() {
+    // After revocation the composite index is removed, so re-granting must succeed
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let (hospital, doctor) = register_two(&env, &client, &admin);
+
+    let resource = String::from_str(&env, "patient-records");
+    client.grant_access(&hospital, &doctor, &resource, &0, &None);
+    client.revoke_access(&hospital, &doctor, &resource);
+
+    // Re-grant must succeed (composite index was cleaned up)
+    let op = client.grant_access(&hospital, &doctor, &resource, &0, &None);
+    assert!(op > 0);
+    assert!(client.check_access(&doctor, &resource));
+}
+
+// ---------------------------------------------------------------------------
+// #228: commit-reveal anti-front-running
+// ---------------------------------------------------------------------------
+#[test]
+fn test_commit_reveal_grant_access() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let (hospital, doctor) = register_two(&env, &client, &admin);
+
+    let resource = String::from_str(&env, "sensitive-resource");
+    // Build nonce and commit hash off-chain (simulated here)
+    let nonce: BytesN<32> = BytesN::from_array(&env, &[1u8; 32]);
+
+    // Compute commit_hash = sha256(nonce || grantor_xdr || grantee_xdr || resource_xdr)
+    let mut data = Bytes::new(&env);
+    data.append(&nonce.clone().into());
+    data.append(&hospital.clone().to_xdr(&env));
+    data.append(&doctor.clone().to_xdr(&env));
+    data.append(&resource.clone().to_xdr(&env));
+    let commit_hash: BytesN<32> = env.crypto().sha256(&data).into();
+
+    // Phase 1: commit
+    client.commit_grant(&hospital, &commit_hash);
+
+    // Phase 2: reveal (grant with nonce)
+    let op_id = client.grant_access(&hospital, &doctor, &resource, &0, &Some(nonce));
+    assert!(op_id > 0);
+    assert!(client.check_access(&doctor, &resource));
+}
+
+#[test]
+fn test_commit_reveal_wrong_nonce_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let (hospital, doctor) = register_two(&env, &client, &admin);
+
+    let resource = String::from_str(&env, "sensitive-resource");
+    let nonce: BytesN<32> = BytesN::from_array(&env, &[1u8; 32]);
+    let wrong_nonce: BytesN<32> = BytesN::from_array(&env, &[2u8; 32]);
+
+    let mut data = Bytes::new(&env);
+    data.append(&nonce.clone().into());
+    data.append(&hospital.clone().to_xdr(&env));
+    data.append(&doctor.clone().to_xdr(&env));
+    data.append(&resource.clone().to_xdr(&env));
+    let commit_hash: BytesN<32> = env.crypto().sha256(&data).into();
+
+    client.commit_grant(&hospital, &commit_hash);
+
+    // Using wrong nonce must fail
+    let result = client.try_grant_access(&hospital, &doctor, &resource, &0, &Some(wrong_nonce));
+    assert_eq!(result, Err(Ok(ContractError::CommitNotFound)));
+}
+
+#[test]
+fn test_commit_reveal_replay_rejected() {
+    let (env, client) = setup();
+    let admin = Address::generate(&env);
+    let (hospital, doctor) = register_two(&env, &client, &admin);
+
+    let resource = String::from_str(&env, "sensitive-resource");
+    let nonce: BytesN<32> = BytesN::from_array(&env, &[3u8; 32]);
+
+    let mut data = Bytes::new(&env);
+    data.append(&nonce.clone().into());
+    data.append(&hospital.clone().to_xdr(&env));
+    data.append(&doctor.clone().to_xdr(&env));
+    data.append(&resource.clone().to_xdr(&env));
+    let commit_hash: BytesN<32> = env.crypto().sha256(&data).into();
+
+    client.commit_grant(&hospital, &commit_hash);
+    client.grant_access(&hospital, &doctor, &resource, &0, &Some(nonce.clone()));
+
+    // Attempting to re-use the same commit (replay) must fail
+    // First revoke so the grant itself doesn't block
+    client.revoke_access(&hospital, &doctor, &resource);
+
+    let result = client.try_grant_access(&hospital, &doctor, &resource, &0, &Some(nonce));
+    assert_eq!(result, Err(Ok(ContractError::CommitAlreadyUsed)));
+}
+
+// ---------------------------------------------------------------------------
+// Existing tests (updated for new signatures)
+// ---------------------------------------------------------------------------
 #[test]
 fn test_check_access_expired() {
     use soroban_sdk::testutils::Ledger;
 
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
-    client.initialize(&admin);
+    let (hospital, doctor) = register_two(&env, &client, &admin);
 
-    let hospital = Address::generate(&env);
-    let doctor = Address::generate(&env);
-
-    client.register_entity(
-        &hospital,
-        &EntityType::Hospital,
-        &String::from_str(&env, "City Hospital"),
-        &String::from_str(&env, "metadata"),
-    );
-
-    client.register_entity(
-        &doctor,
-        &EntityType::Doctor,
-        &String::from_str(&env, "Dr. Smith"),
-        &String::from_str(&env, "metadata"),
-    );
-
-    // Grant access with expiration at timestamp 100
     let resource_id = String::from_str(&env, "patient-123-records");
-    client.grant_access(&hospital, &doctor, &resource_id, &100);
+    client.grant_access(&hospital, &doctor, &resource_id, &100, &None);
 
-    // Access should be valid before expiration
     assert!(client.check_access(&doctor, &resource_id));
 
-    // Advance ledger time past expiration
     env.ledger().set_timestamp(200);
-
-    // Access should now be denied (expired)
     assert!(!client.check_access(&doctor, &resource_id));
 }
 
 #[test]
 fn test_get_entity_permissions() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
-    client.initialize(&admin);
+    let (hospital, doctor) = register_two(&env, &client, &admin);
 
-    let hospital = Address::generate(&env);
-    let doctor = Address::generate(&env);
+    let r1 = String::from_str(&env, "patient-123-records");
+    let r2 = String::from_str(&env, "patient-456-records");
+    client.grant_access(&hospital, &doctor, &r1, &0, &None);
+    client.grant_access(&hospital, &doctor, &r2, &0, &None);
 
-    client.register_entity(
-        &hospital,
-        &EntityType::Hospital,
-        &String::from_str(&env, "City Hospital"),
-        &String::from_str(&env, "metadata"),
-    );
-
-    client.register_entity(
-        &doctor,
-        &EntityType::Doctor,
-        &String::from_str(&env, "Dr. Smith"),
-        &String::from_str(&env, "metadata"),
-    );
-
-    // Grant multiple access permissions
-    let resource_1 = String::from_str(&env, "patient-123-records");
-    let resource_2 = String::from_str(&env, "patient-456-records");
-
-    client.grant_access(&hospital, &doctor, &resource_1, &0);
-    client.grant_access(&hospital, &doctor, &resource_2, &0);
-
-    // Get all permissions for the doctor
     let permissions = client.get_entity_permissions(&doctor);
     assert_eq!(permissions.len(), 2);
 }
 
 #[test]
 fn test_deactivate_entity() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin);
 
@@ -266,28 +316,19 @@ fn test_deactivate_entity() {
         &String::from_str(&env, "metadata"),
     );
 
-    // Deactivate the entity
     client.deactivate_entity(&admin, &hospital);
-
-    // Verify entity is deactivated
     let entity = client.get_entity(&hospital);
     assert!(!entity.active);
 }
 
 #[test]
 fn test_deactivate_entity_non_admin() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin);
 
     let hospital = Address::generate(&env);
     let non_admin = Address::generate(&env);
-
     client.register_entity(
         &hospital,
         &EntityType::Hospital,
@@ -301,12 +342,7 @@ fn test_deactivate_entity_non_admin() {
 
 #[test]
 fn test_update_entity() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin);
 
@@ -318,7 +354,6 @@ fn test_update_entity() {
         &String::from_str(&env, "Original metadata"),
     );
 
-    // Update metadata
     let new_metadata = String::from_str(&env, "Updated metadata");
     client.update_entity(&hospital, &new_metadata);
 
@@ -328,11 +363,7 @@ fn test_update_entity() {
 
 #[test]
 fn test_register_and_get_did() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
     let patient = Address::generate(&env);
     client.initialize(&admin);
@@ -346,11 +377,7 @@ fn test_register_and_get_did() {
 
 #[test]
 fn test_register_did_invalid_format_rejected() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
     let provider = Address::generate(&env);
     client.initialize(&admin);
@@ -400,11 +427,7 @@ fn test_register_did_self_registration_only() {
 
 #[test]
 fn test_register_did_update_replaces_value() {
-    let env = Env::default();
-    env.mock_all_auths();
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
     let provider = Address::generate(&env);
     client.initialize(&admin);
@@ -420,18 +443,12 @@ fn test_register_did_update_replaces_value() {
 
 #[test]
 fn test_grant_access_grantor_not_registered() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin);
 
     let unregistered = Address::generate(&env);
     let doctor = Address::generate(&env);
-
     client.register_entity(
         &doctor,
         &EntityType::Doctor,
@@ -444,24 +461,19 @@ fn test_grant_access_grantor_not_registered() {
         &doctor,
         &String::from_str(&env, "resource-1"),
         &0,
+        &None,
     );
     assert_eq!(result, Err(Ok(ContractError::GrantorNotRegistered)));
 }
 
 #[test]
 fn test_grant_access_grantee_not_registered() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
     client.initialize(&admin);
 
     let hospital = Address::generate(&env);
     let unregistered = Address::generate(&env);
-
     client.register_entity(
         &hospital,
         &EntityType::Hospital,
@@ -474,70 +486,16 @@ fn test_grant_access_grantee_not_registered() {
         &unregistered,
         &String::from_str(&env, "resource-1"),
         &0,
+        &None,
     );
     assert_eq!(result, Err(Ok(ContractError::GranteeNotRegistered)));
 }
 
 #[test]
-fn test_grant_access_already_granted() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
-    let admin = Address::generate(&env);
-    client.initialize(&admin);
-
-    let hospital = Address::generate(&env);
-    let doctor = Address::generate(&env);
-
-    client.register_entity(
-        &hospital,
-        &EntityType::Hospital,
-        &String::from_str(&env, "City Hospital"),
-        &String::from_str(&env, "metadata"),
-    );
-    client.register_entity(
-        &doctor,
-        &EntityType::Doctor,
-        &String::from_str(&env, "Dr. Smith"),
-        &String::from_str(&env, "metadata"),
-    );
-
-    let resource = String::from_str(&env, "patient-records");
-    client.grant_access(&hospital, &doctor, &resource, &0);
-
-    let result = client.try_grant_access(&hospital, &doctor, &resource, &0);
-    assert_eq!(result, Err(Ok(ContractError::AccessAlreadyGranted)));
-}
-
-#[test]
 fn test_revoke_access_permission_not_found() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
-    client.initialize(&admin);
-
-    let hospital = Address::generate(&env);
-    let doctor = Address::generate(&env);
-
-    client.register_entity(
-        &hospital,
-        &EntityType::Hospital,
-        &String::from_str(&env, "City Hospital"),
-        &String::from_str(&env, "metadata"),
-    );
-    client.register_entity(
-        &doctor,
-        &EntityType::Doctor,
-        &String::from_str(&env, "Dr. Smith"),
-        &String::from_str(&env, "metadata"),
-    );
+    let (hospital, doctor) = register_two(&env, &client, &admin);
 
     let result = client.try_revoke_access(
         &hospital,
@@ -549,31 +507,11 @@ fn test_revoke_access_permission_not_found() {
 
 #[test]
 fn test_revoke_access_not_authorized() {
-    let env = Env::default();
-    env.mock_all_auths();
-
-    let contract_id = env.register(AccessControl, ());
-    let client = AccessControlClient::new(&env, &contract_id);
-
+    let (env, client) = setup();
     let admin = Address::generate(&env);
-    client.initialize(&admin);
+    let (hospital, doctor) = register_two(&env, &client, &admin);
 
-    let hospital = Address::generate(&env);
-    let doctor = Address::generate(&env);
     let other = Address::generate(&env);
-
-    client.register_entity(
-        &hospital,
-        &EntityType::Hospital,
-        &String::from_str(&env, "City Hospital"),
-        &String::from_str(&env, "metadata"),
-    );
-    client.register_entity(
-        &doctor,
-        &EntityType::Doctor,
-        &String::from_str(&env, "Dr. Smith"),
-        &String::from_str(&env, "metadata"),
-    );
     client.register_entity(
         &other,
         &EntityType::Doctor,
@@ -582,9 +520,8 @@ fn test_revoke_access_not_authorized() {
     );
 
     let resource = String::from_str(&env, "patient-records");
-    client.grant_access(&hospital, &doctor, &resource, &0);
+    client.grant_access(&hospital, &doctor, &resource, &0, &None);
 
-    // `other` is not the grantor and not the admin
     let result = client.try_revoke_access(&other, &doctor, &resource);
     assert_eq!(result, Err(Ok(ContractError::NotAuthorizedToRevoke)));
 }

@@ -148,8 +148,12 @@ impl HealthcareRegistry {
         env.storage().instance().set(&DataKey::Admin, &admin);
     }
 
-    pub fn propose_admin(env: Env, new_admin: Address) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+    pub fn propose_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotAuthorized)?;
         admin.require_auth();
 
         env.storage()
@@ -157,29 +161,36 @@ impl HealthcareRegistry {
             .set(&DataKey::PendingAdmin, &new_admin);
         env.events()
             .publish((Symbol::new(&env, ADMIN_PROPOSED),), new_admin);
+        Ok(())
     }
 
-    pub fn accept_admin(env: Env) {
+    pub fn accept_admin(env: Env) -> Result<(), Error> {
         let pending: Address = env
             .storage()
             .instance()
             .get(&DataKey::PendingAdmin)
-            .expect("No pending admin");
+            .ok_or(Error::NotFound)?;
         pending.require_auth();
 
         env.storage().instance().set(&DataKey::Admin, &pending);
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.events()
             .publish((Symbol::new(&env, ADMIN_ACCEPTED),), pending);
+        Ok(())
     }
 
-    pub fn cancel_admin_transfer(env: Env) {
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+    pub fn cancel_admin_transfer(env: Env) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotAuthorized)?;
         admin.require_auth();
 
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.events()
             .publish((Symbol::new(&env, ADMIN_TRANSFER_CANCELLED),), admin);
+        Ok(())
     }
 
     pub fn register_institution(
@@ -188,12 +199,12 @@ impl HealthcareRegistry {
         name: String,
         license_id: String,
         metadata: String,
-    ) {
+    ) -> Result<(), Error> {
         wallet.require_auth();
 
         let key = DataKey::Inst(wallet.clone());
         if env.storage().persistent().has(&key) {
-            panic!("Already registered");
+            return Err(Error::AlreadyRegistered);
         }
 
         let data = InstitutionData {
@@ -208,40 +219,52 @@ impl HealthcareRegistry {
         // Event emission
         env.events()
             .publish((symbol_short!("reg"), wallet), symbol_short!("success"));
+        Ok(())
     }
 
-    pub fn get_institution(env: Env, wallet: Address) -> InstitutionData {
+    pub fn get_institution(env: Env, wallet: Address) -> Result<InstitutionData, Error> {
         let key = DataKey::Inst(wallet);
-        env.storage()
-            .persistent()
-            .get(&key)
-            .expect("Institution not found")
+        env.storage().persistent().get(&key).ok_or(Error::NotFound)
     }
 
-    pub fn update_institution(env: Env, wallet: Address, metadata: String) {
+    pub fn update_institution(env: Env, wallet: Address, metadata: String) -> Result<(), Error> {
         wallet.require_auth();
 
         let key = DataKey::Inst(wallet.clone());
-        let mut data: InstitutionData = env.storage().persistent().get(&key).expect("Not found");
+        let mut data: InstitutionData = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::NotFound)?;
 
         data.metadata = metadata;
         env.storage().persistent().set(&key, &data);
+        Ok(())
     }
 
-    pub fn verify_institution(env: Env, verifier: Address, wallet: Address) {
+    pub fn verify_institution(env: Env, verifier: Address, wallet: Address) -> Result<(), Error> {
         verifier.require_auth();
 
         // Access Control: Check if caller is the admin
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotAuthorized)?;
         if verifier != admin {
-            panic!("Not authorized to verify");
+            return Err(Error::NotAuthorized);
         }
 
         let key = DataKey::Inst(wallet.clone());
-        let mut data: InstitutionData = env.storage().persistent().get(&key).expect("Not found");
+        let mut data: InstitutionData = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(Error::NotFound)?;
 
         data.is_verified = true;
         env.storage().persistent().set(&key, &data);
+        Ok(())
     }
 }
 
@@ -310,7 +333,11 @@ impl AppointmentScheduling {
         appointment_id
     }
 
-    pub fn cancel_appointment(env: Env, patient: Address, appointment_id: u64) {
+    pub fn cancel_appointment(
+        env: Env,
+        patient: Address,
+        appointment_id: u64,
+    ) -> Result<(), Error> {
         patient.require_auth();
 
         let appointment_key = AppointmentKey::Appointment(appointment_id);
@@ -318,16 +345,15 @@ impl AppointmentScheduling {
             .storage()
             .persistent()
             .get(&appointment_key)
-            .ok_or(Error::AppointmentNotFound)
-            .unwrap();
+            .ok_or(Error::AppointmentNotFound)?;
 
         // Only patient can cancel, and only if appointment is scheduled
         if appointment.patient != patient {
-            panic!("Unauthorized to cancel this appointment");
+            return Err(Error::UnauthorizedAppointmentAction);
         }
 
         if !matches!(appointment.status, AppointmentStatus::Scheduled) {
-            panic!("Can only cancel scheduled appointments");
+            return Err(Error::InvalidAppointmentStatus);
         }
 
         appointment.status = AppointmentStatus::Canceled;
@@ -338,9 +364,14 @@ impl AppointmentScheduling {
         // Emit event
         env.events()
             .publish((symbol_short!("appt_can"), appointment_id), patient);
+        Ok(())
     }
 
-    pub fn complete_appointment(env: Env, doctor: Address, appointment_id: u64) {
+    pub fn complete_appointment(
+        env: Env,
+        doctor: Address,
+        appointment_id: u64,
+    ) -> Result<(), Error> {
         doctor.require_auth();
 
         let appointment_key = AppointmentKey::Appointment(appointment_id);
@@ -348,16 +379,15 @@ impl AppointmentScheduling {
             .storage()
             .persistent()
             .get(&appointment_key)
-            .ok_or(Error::AppointmentNotFound)
-            .unwrap();
+            .ok_or(Error::AppointmentNotFound)?;
 
         // Only doctor can complete, and only if appointment is scheduled
         if appointment.doctor != doctor {
-            panic!("Unauthorized to complete this appointment");
+            return Err(Error::UnauthorizedAppointmentAction);
         }
 
         if !matches!(appointment.status, AppointmentStatus::Scheduled) {
-            panic!("Can only complete scheduled appointments");
+            return Err(Error::InvalidAppointmentStatus);
         }
 
         appointment.status = AppointmentStatus::Completed;
@@ -368,6 +398,7 @@ impl AppointmentScheduling {
         // Emit event
         env.events()
             .publish((symbol_short!("appt_cmp"), appointment_id), doctor);
+        Ok(())
     }
 
     pub fn get_appointments(env: Env, user: Address) -> Vec<Appointment> {

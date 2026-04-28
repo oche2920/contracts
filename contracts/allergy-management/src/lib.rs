@@ -57,6 +57,7 @@ pub enum Error {
     InvalidDate = 6,
     DuplicateAllergy = 7,
     AccessDenied = 8,
+    AlreadyInitialized = 9,
 }
 
 #[contract]
@@ -65,17 +66,18 @@ pub struct AllergyManagement;
 #[contractimpl]
 impl AllergyManagement {
     /// Initialize the contract with an admin address
-    pub fn initialize(env: Env, admin: Address) {
+    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
         admin.require_auth();
 
         if env.storage().instance().has(&DataKey::Admin) {
-            panic!("Contract already initialized");
+            return Err(Error::AlreadyInitialized);
         }
 
         env.storage().instance().set(&DataKey::Admin, &admin);
         env.storage()
             .instance()
             .set(&DataKey::AllergyCounter, &0u64);
+        Ok(())
     }
 
     /// Record a new allergy for a patient

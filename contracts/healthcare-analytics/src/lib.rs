@@ -150,8 +150,7 @@ impl HealthcareAnalytics {
         let mut min: i128 = i128::MAX;
         let mut max: i128 = i128::MIN;
 
-        for i in 0..ids.len() {
-            let id = ids.get(i).unwrap();
+        for id in ids.iter() {
             if let Some(record) = env
                 .storage()
                 .persistent()
@@ -259,8 +258,7 @@ impl HealthcareAnalytics {
 
         let mut results: Vec<QualityMetricRecord> = Vec::new(&env);
 
-        for i in 0..ids.len() {
-            let id = ids.get(i).unwrap();
+        for id in ids.iter() {
             if let Some(record) = env
                 .storage()
                 .persistent()

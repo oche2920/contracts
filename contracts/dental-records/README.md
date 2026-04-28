@@ -1,0 +1,63 @@
+# Dental Records Contract
+
+## Purpose
+
+`dental-records` implements healthcare workflow/business logic for this workspace as an on-chain contract crate.
+This README provides a quick operational map for integration, testing, and deployment.
+
+## Storage Model
+
+- State keys and records are defined in `src/lib.rs` and persisted in contract storage.
+- Persistent state is committed on-chain through contract storage abstractions in this crate.
+- Events and error enums in `src/lib.rs` should be treated as part of the external contract interface.
+
+## Public Methods
+
+### Constructors / Initialization
+- Constructor/init method names were not auto-detected; review `src/lib.rs`.
+
+### Messages / Entry Points
+- `create_dental_chart`
+- `create_treatment_plan`
+- `document_informed_consent_dental`
+- `document_procedure_performed`
+- `prescribe_dental_medication`
+- `record_dental_radiograph`
+- `record_ortho_adjustment`
+- `record_periodontal_assessment`
+- `record_tooth_condition`
+- `schedule_dental_procedure`
+- `track_orthodontic_treatment`
+
+## Auth Model
+
+- Uses `require_auth()` checks before privileged operations.
+
+## Test Steps
+
+```bash
+# Run unit/integration tests for this crate
+cargo test -p dental-records
+```
+
+## Deploy Steps
+
+```bash
+# 1) Build optimized wasm artifact
+cargo build -p dental-records --release --target wasm32-unknown-unknown
+
+# 2) (optional) Optimize wasm artifact
+soroban contract optimize \
+  --wasm target/wasm32-unknown-unknown/release/dental_records.wasm
+
+# 3) Deploy
+soroban contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/dental_records.wasm \
+  --source <IDENTITY> \
+  --network <NETWORK>
+```
+
+## Notes
+
+- Keep this README aligned with API/auth/storage changes in `src/lib.rs`.
+- If this contract depends on external registries/contracts, document those dependencies before release.

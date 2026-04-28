@@ -2,7 +2,9 @@
 
 use soroban_sdk::{symbol_short, testutils::Address as _, Address, Env, String, Symbol, Vec};
 
-use crate::{AllergyManagement, AllergyManagementClient, AllergyStatus, RecordAllergyRequest};
+use crate::{
+    AllergyManagement, AllergyManagementClient, AllergyStatus, Error, RecordAllergyRequest,
+};
 
 fn create_test_env() -> (
     Env,
@@ -54,12 +56,12 @@ fn test_initialize() {
 }
 
 #[test]
-#[should_panic(expected = "Contract already initialized")]
 fn test_double_initialize() {
     let (_, admin, _, _, client) = create_test_env();
 
     // Try to initialize again
-    client.initialize(&admin);
+    let result = client.try_initialize(&admin);
+    assert_eq!(result, Err(Ok(Error::AlreadyInitialized)));
 }
 
 #[test]

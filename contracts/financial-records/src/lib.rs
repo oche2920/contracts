@@ -1,5 +1,7 @@
 #![no_std]
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, vec, Address, Env, String, Vec};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, vec, Address, Env, String, Vec,
+};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -208,14 +210,15 @@ impl FinancialRecordContract {
         let end = (offset + limit).min(type_seq);
 
         for seq in offset..end {
-            let record_idx: u32 = match e
-                .storage()
-                .persistent()
-                .get(&DataKey::TypeIndex(owner.clone(), rt, seq))
-            {
-                Some(idx) => idx,
-                None => continue,
-            };
+            let record_idx: u32 =
+                match e
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::TypeIndex(owner.clone(), rt, seq))
+                {
+                    Some(idx) => idx,
+                    None => continue,
+                };
             if let Some(record) = e
                 .storage()
                 .persistent()
@@ -243,8 +246,10 @@ impl FinancialRecordContract {
 
     fn check_access(e: &Env, caller: &Address, owner: &Address) -> Result<(), ContractError> {
         if caller == owner {
+            caller.require_auth();
             return Ok(());
         }
+        caller.require_auth();
         let authorized: bool = e
             .storage()
             .persistent()

@@ -22,6 +22,7 @@ pub enum Error {
     InvalidReviewerRole = 16,
     DeadlineExceeded = 17,
     AutoApprovalFailed = 18,
+    ReviewNotFound = 19,
 }
 
 /// Lifecycle status of a prior authorization request.

@@ -1,9 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::{
-        safe_increment, safe_increment_ns, safe_increment_persistent,
-        safe_increment_persistent_ns, AppointmentScheduling, AppointmentSchedulingClient,
-        AppointmentStatus, DataKey, HealthcareRegistry, HealthcareRegistryClient,
+        AppointmentScheduling, AppointmentSchedulingClient, AppointmentStatus, DataKey, Error,
+        HealthcareRegistry, HealthcareRegistryClient,
     };
 
     use soroban_sdk::{
@@ -76,7 +75,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Already registered")]
     fn test_duplicate_registration_fails() {
         let env = Env::default();
         let (client, _, inst_addr) = setup_test(&env);
@@ -84,7 +82,8 @@ mod tests {
 
         let name = String::from_str(&env, "Clinic A");
         client.register_institution(&inst_addr, &name, &name, &name);
-        client.register_institution(&inst_addr, &name, &name, &name);
+        let result = client.try_register_institution(&inst_addr, &name, &name, &name);
+        assert_eq!(result, Err(Ok(Error::AlreadyRegistered)));
     }
 
     #[test]
@@ -103,7 +102,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Not authorized to verify")]
     fn test_unauthorized_verification_fails() {
         let env = Env::default();
         let (client, _, inst_addr) = setup_test(&env);
@@ -113,7 +111,8 @@ mod tests {
         let name = String::from_str(&env, "Clinic A");
         client.register_institution(&inst_addr, &name, &name, &name);
 
-        client.verify_institution(&fake_admin, &inst_addr);
+        let result = client.try_verify_institution(&fake_admin, &inst_addr);
+        assert_eq!(result, Err(Ok(Error::NotAuthorized)));
     }
 
     #[test]
@@ -124,7 +123,7 @@ mod tests {
         let new_admin = Address::generate(&env);
 
         env.as_contract(&contract_id, || {
-            HealthcareRegistry::propose_admin(env.clone(), new_admin.clone());
+            HealthcareRegistry::propose_admin(env.clone(), new_admin.clone()).unwrap();
         });
 
         assert_eq!(
@@ -133,7 +132,7 @@ mod tests {
         );
 
         env.as_contract(&contract_id, || {
-            HealthcareRegistry::accept_admin(env.clone());
+            HealthcareRegistry::accept_admin(env.clone()).unwrap();
         });
 
         assert_eq!(stored_admin(&env, &contract_id), new_admin.clone());
@@ -148,11 +147,11 @@ mod tests {
         let new_admin = Address::generate(&env);
 
         env.as_contract(&contract_id, || {
-            HealthcareRegistry::propose_admin(env.clone(), new_admin.clone());
+            HealthcareRegistry::propose_admin(env.clone(), new_admin.clone()).unwrap();
         });
 
         env.as_contract(&contract_id, || {
-            HealthcareRegistry::cancel_admin_transfer(env.clone());
+            HealthcareRegistry::cancel_admin_transfer(env.clone()).unwrap();
         });
 
         assert_eq!(stored_admin(&env, &contract_id), admin.clone());
@@ -278,7 +277,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Unauthorized to cancel this appointment")]
     fn test_unauthorized_cancel_appointment() {
         let env = Env::default();
         let (client, patient, doctor) = setup_appointment_test(&env);
@@ -288,11 +286,11 @@ mod tests {
         let datetime = 1640995200;
         let appointment_id = client.create_appointment(&patient, &doctor, &datetime);
 
-        client.cancel_appointment(&unauthorized_user, &appointment_id);
+        let result = client.try_cancel_appointment(&unauthorized_user, &appointment_id);
+        assert_eq!(result, Err(Ok(Error::UnauthorizedAppointmentAction)));
     }
 
     #[test]
-    #[should_panic(expected = "Can only cancel scheduled appointments")]
     fn test_cancel_completed_appointment_fails() {
         let env = Env::default();
         let (client, patient, doctor) = setup_appointment_test(&env);
@@ -302,7 +300,8 @@ mod tests {
         let appointment_id = client.create_appointment(&patient, &doctor, &datetime);
 
         client.complete_appointment(&doctor, &appointment_id);
-        client.cancel_appointment(&patient, &appointment_id);
+        let result = client.try_cancel_appointment(&patient, &appointment_id);
+        assert_eq!(result, Err(Ok(Error::InvalidAppointmentStatus)));
     }
 
     #[test]
@@ -322,7 +321,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Unauthorized to complete this appointment")]
     fn test_unauthorized_complete_appointment() {
         let env = Env::default();
         let (client, patient, doctor) = setup_appointment_test(&env);
@@ -332,7 +330,8 @@ mod tests {
         let datetime = 1640995200;
         let appointment_id = client.create_appointment(&patient, &doctor, &datetime);
 
-        client.complete_appointment(&unauthorized_user, &appointment_id);
+        let result = client.try_complete_appointment(&unauthorized_user, &appointment_id);
+        assert_eq!(result, Err(Ok(Error::UnauthorizedAppointmentAction)));
     }
 
     #[test]
