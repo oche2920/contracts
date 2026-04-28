@@ -1,17 +1,43 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Vec,
 };
 
 mod test;
 
-pub const VOTING_WINDOW: u64 = 7 * 24 * 60 * 60; // 7 days in seconds
+pub const VOTING_WINDOW: u64 = 7 * 24 * 60 * 60;
+/// Mandatory delay between threshold approval and execution (24 h).
+pub const TIMELOCK_DELAY: u64 = 24 * 60 * 60;
+
+// ── Errors ────────────────────────────────────────────────────────────────────
+
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum Error {
+    AlreadyInitialized = 1,
+    NotInitialized     = 2,
+    InvalidThreshold   = 3,
+    NotASigner         = 4,
+    ProposalNotFound   = 5,
+    AlreadyExecuted    = 6,
+    Expired            = 7,
+    AlreadyVoted       = 8,
+    ThresholdNotMet    = 9,
+    /// Timelock has not elapsed yet.
+    TimelockActive     = 10,
+    /// Proposal was cancelled.
+    Cancelled          = 11,
+    /// Caller is not authorised to cancel (must be a signer).
+    NotAuthorized      = 12,
+}
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
 
 #[contracttype]
 pub enum DataKey {
+    Initialized,
     Signers,
     Threshold,
     NextId,
@@ -24,7 +50,10 @@ pub enum DataKey {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProposalStatus {
     Active,
+    /// Threshold reached; execution allowed after `approved_at + TIMELOCK_DELAY`.
+    Approved,
     Executed,
+    Cancelled,
 }
 
 #[contracttype]
@@ -33,7 +62,12 @@ pub struct UpgradeProposal {
     pub new_wasm_hash: BytesN<32>,
     pub votes: Vec<Address>,
     pub proposed_at: u64,
+    /// Timestamp when the threshold was first reached (starts the timelock).
+    pub approved_at: u64,
     pub status: ProposalStatus,
+    /// Domain tag: SHA-256(contract_address ++ "upgrade-governance" ++ proposal_id).
+    /// Stored so callers can verify the binding off-chain.
+    pub domain_tag: BytesN<32>,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -43,32 +77,36 @@ pub struct UpgradeGovernance;
 
 #[contractimpl]
 impl UpgradeGovernance {
-    /// Initialize with admin signers and an approval threshold.
-    pub fn initialize(env: Env, signers: Vec<Address>, threshold: u32) {
-        if env.storage().persistent().has(&DataKey::Signers) {
-            panic!("Already initialized");
-        }
+    pub fn initialize(env: Env, signers: Vec<Address>, threshold: u32) -> Result<(), Error> {
+        Self::assert_not_initialized(&env)?;
         if threshold == 0 || threshold as usize > signers.len() as usize {
-            panic!("Invalid threshold");
+            return Err(Error::InvalidThreshold);
         }
         env.storage().persistent().set(&DataKey::Signers, &signers);
         env.storage()
             .persistent()
             .set(&DataKey::Threshold, &threshold);
         env.storage().persistent().set(&DataKey::NextId, &0u64);
+        env.storage().persistent().set(&DataKey::Initialized, &true);
+        Ok(())
     }
 
-    /// Propose a WASM upgrade. Any admin signer may call this.
-    /// Returns the new proposal_id.
-    pub fn propose_upgrade(env: Env, proposer: Address, new_wasm_hash: BytesN<32>) -> u64 {
+    pub fn propose_upgrade(
+        env: Env,
+        proposer: Address,
+        new_wasm_hash: BytesN<32>,
+    ) -> Result<u64, Error> {
+        Self::assert_initialized(&env)?;
         proposer.require_auth();
-        Self::assert_signer(&env, &proposer);
+        Self::assert_signer(&env, &proposer)?;
 
         let proposal_id: u64 = env
             .storage()
             .persistent()
             .get(&DataKey::NextId)
-            .expect("Not initialized");
+            .ok_or(Error::NotInitialized)?;
+
+        let domain_tag = Self::compute_domain_tag(&env, proposal_id);
 
         let mut votes: Vec<Address> = Vec::new(&env);
         votes.push_back(proposer.clone());
@@ -77,7 +115,9 @@ impl UpgradeGovernance {
             new_wasm_hash: new_wasm_hash.clone(),
             votes,
             proposed_at: env.ledger().timestamp(),
+            approved_at: 0,
             status: ProposalStatus::Active,
+            domain_tag,
         };
 
         env.storage()
@@ -87,53 +127,76 @@ impl UpgradeGovernance {
             .persistent()
             .set(&DataKey::NextId, &(proposal_id + 1));
 
-        env.events().publish(
-            (symbol_short!("proposed"), proposal_id),
-            new_wasm_hash,
-        );
+        env.events()
+            .publish((symbol_short!("proposed"), proposal_id), new_wasm_hash);
 
-        proposal_id
+        Ok(proposal_id)
     }
 
-    /// Cast a vote on an active upgrade proposal.
-    pub fn vote_upgrade(env: Env, voter: Address, proposal_id: u64) {
+    pub fn vote_upgrade(env: Env, voter: Address, proposal_id: u64) -> Result<(), Error> {
+        Self::assert_initialized(&env)?;
         voter.require_auth();
-        Self::assert_signer(&env, &voter);
+        Self::assert_signer(&env, &voter)?;
 
-        let mut proposal = Self::load_active_proposal(&env, proposal_id);
+        let mut proposal = Self::load_votable_proposal(&env, proposal_id)?;
 
-        for i in 0..proposal.votes.len() {
-            if proposal.votes.get(i).unwrap() == voter {
-                panic!("Already voted");
+        for vote in proposal.votes.iter() {
+            if vote == voter {
+                return Err(Error::AlreadyVoted);
             }
         }
 
         proposal.votes.push_back(voter.clone());
+
+        // Check whether threshold is now reached and start the timelock.
+        let threshold: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Threshold)
+            .ok_or(Error::NotInitialized)?;
+
+        if proposal.status == ProposalStatus::Active && proposal.votes.len() >= threshold {
+            proposal.status = ProposalStatus::Approved;
+            proposal.approved_at = env.ledger().timestamp();
+            env.events()
+                .publish((symbol_short!("approved"), proposal_id), proposal.votes.len());
+        }
+
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
 
         env.events()
             .publish((symbol_short!("voted"), proposal_id), voter);
+        Ok(())
     }
 
-    /// Execute the upgrade once the vote threshold is met and the window is open.
-    /// Calls env.deployer().update_current_contract_wasm() and emits
-    /// contract_upgraded.
-    pub fn execute_upgrade(env: Env, caller: Address, proposal_id: u64) {
+    /// Execute an upgrade after the timelock has elapsed.
+    pub fn execute_upgrade(env: Env, caller: Address, proposal_id: u64) -> Result<(), Error> {
+        Self::assert_initialized(&env)?;
         caller.require_auth();
-        Self::assert_signer(&env, &caller);
+        Self::assert_signer(&env, &caller)?;
 
-        let mut proposal = Self::load_active_proposal(&env, proposal_id);
-
-        let threshold: u32 = env
+        let mut proposal: UpgradeProposal = env
             .storage()
             .persistent()
-            .get(&DataKey::Threshold)
-            .expect("Not initialized");
+            .get(&DataKey::Proposal(proposal_id))
+            .ok_or(Error::ProposalNotFound)?;
 
-        if proposal.votes.len() < threshold {
-            panic!("Threshold not met");
+        match proposal.status {
+            ProposalStatus::Executed  => return Err(Error::AlreadyExecuted),
+            ProposalStatus::Cancelled => return Err(Error::Cancelled),
+            ProposalStatus::Active    => return Err(Error::ThresholdNotMet),
+            ProposalStatus::Approved  => {}
+        }
+
+        if env.ledger().timestamp() > proposal.proposed_at + VOTING_WINDOW {
+            return Err(Error::Expired);
+        }
+
+        // Enforce timelock: must wait TIMELOCK_DELAY after approval.
+        if env.ledger().timestamp() < proposal.approved_at + TIMELOCK_DELAY {
+            return Err(Error::TimelockActive);
         }
 
         proposal.status = ProposalStatus::Executed;
@@ -148,45 +211,108 @@ impl UpgradeGovernance {
             (symbol_short!("ct_upgrad"), proposal_id),
             proposal.new_wasm_hash,
         );
+        Ok(())
     }
 
-    /// Read a proposal by id.
-    pub fn get_proposal(env: Env, proposal_id: u64) -> UpgradeProposal {
+    /// Cancel an approved-but-not-yet-executed proposal during the timelock window.
+    pub fn cancel_upgrade(env: Env, caller: Address, proposal_id: u64) -> Result<(), Error> {
+        Self::assert_initialized(&env)?;
+        caller.require_auth();
+        Self::assert_signer(&env, &caller)?;
+
+        let mut proposal: UpgradeProposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .ok_or(Error::ProposalNotFound)?;
+
+        match proposal.status {
+            ProposalStatus::Executed  => return Err(Error::AlreadyExecuted),
+            ProposalStatus::Cancelled => return Err(Error::Cancelled),
+            // Allow cancellation of both Active and Approved proposals.
+            _ => {}
+        }
+
+        proposal.status = ProposalStatus::Cancelled;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal);
+
+        env.events()
+            .publish((symbol_short!("cancelled"), proposal_id), caller);
+        Ok(())
+    }
+
+    pub fn get_proposal(env: Env, proposal_id: u64) -> Result<UpgradeProposal, Error> {
         env.storage()
             .persistent()
             .get(&DataKey::Proposal(proposal_id))
-            .expect("Proposal not found")
+            .ok_or(Error::ProposalNotFound)
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
-    fn load_active_proposal(env: &Env, proposal_id: u64) -> UpgradeProposal {
-        let proposal: UpgradeProposal = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .expect("Proposal not found");
-
-        if proposal.status == ProposalStatus::Executed {
-            panic!("Proposal already executed");
-        }
-        if env.ledger().timestamp() > proposal.proposed_at + VOTING_WINDOW {
-            panic!("Proposal expired");
-        }
-        proposal
+    /// Compute a domain tag that binds a proposal to this specific contract
+    /// instance and action type, preventing cross-context replay (#233).
+    ///
+    /// tag = SHA-256( contract_address_xdr ++ b"upgrade-governance" ++ proposal_id_le_bytes )
+    fn compute_domain_tag(env: &Env, proposal_id: u64) -> BytesN<32> {
+        use soroban_sdk::{xdr::ToXdr, Bytes};
+        let mut data = Bytes::new(env);
+        // Serialize the contract address to XDR bytes for a stable, unique identifier.
+        let addr_xdr = env.current_contract_address().to_xdr(env);
+        data.append(&addr_xdr);
+        data.append(&Bytes::from_slice(env, b"upgrade-governance"));
+        data.append(&Bytes::from_slice(env, &proposal_id.to_le_bytes()));
+        env.crypto().sha256(&data).into()
     }
 
-    fn assert_signer(env: &Env, caller: &Address) {
+    // ── guards ────────────────────────────────────────────────────────────────
+
+    fn assert_initialized(env: &Env) -> Result<(), Error> {
+        if !env.storage().persistent().has(&DataKey::Initialized) {
+            return Err(Error::NotInitialized);
+        }
+        Ok(())
+    }
+
+    fn assert_not_initialized(env: &Env) -> Result<(), Error> {
+        if env.storage().persistent().has(&DataKey::Initialized) {
+            return Err(Error::AlreadyInitialized);
+        }
+        Ok(())
+    }
+
+    fn assert_signer(env: &Env, caller: &Address) -> Result<(), Error> {
         let signers: Vec<Address> = env
             .storage()
             .persistent()
             .get(&DataKey::Signers)
-            .expect("Not initialized");
-        for i in 0..signers.len() {
-            if signers.get(i).unwrap() == *caller {
-                return;
+            .ok_or(Error::NotInitialized)?;
+        for signer in signers.iter() {
+            if signer == *caller {
+                return Ok(());
             }
         }
-        panic!("Unauthorized: not an admin signer");
+        Err(Error::NotASigner)
+    }
+
+    /// Load a proposal that can still receive votes (Active or Approved, not expired).
+    fn load_votable_proposal(env: &Env, proposal_id: u64) -> Result<UpgradeProposal, Error> {
+        let proposal: UpgradeProposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Proposal(proposal_id))
+            .ok_or(Error::ProposalNotFound)?;
+
+        match proposal.status {
+            ProposalStatus::Executed  => return Err(Error::AlreadyExecuted),
+            ProposalStatus::Cancelled => return Err(Error::Cancelled),
+            _ => {}
+        }
+        if env.ledger().timestamp() > proposal.proposed_at + VOTING_WINDOW {
+            return Err(Error::Expired);
+        }
+        Ok(proposal)
     }
 }

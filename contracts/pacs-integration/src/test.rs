@@ -1,8 +1,8 @@
 #![cfg(test)]
 
-use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol, Vec};
+use soroban_sdk::{testutils::{Address as _, Ledger}, Address, BytesN, Env, String, Symbol, Vec};
 
-use crate::types::{ComparisonCriteria, ImagingFilters};
+use crate::types::{ComparisonCriteria, Error, ImagingFilters};
 use crate::{PacsContract, PacsContractClient};
 
 // ─── helpers ────────────────────────────────────────────────────────────────
@@ -211,9 +211,17 @@ fn grant_access_and_track_view() {
         &patient,
         &viewer,
         &Symbol::new(&env, "view_only"),
+        &String::from_str(&env, "clinical-review"),
         &None,
     );
-    client.track_study_views(&sid, &viewer, &1_700_001_000_u64, &30_u32);
+    env.ledger().set_timestamp(1_000);
+    client.track_study_views(
+        &sid,
+        &viewer,
+        &String::from_str(&env, "clinical-review"),
+        &1_000_u64,
+        &30_u32,
+    );
 }
 
 #[test]
@@ -223,8 +231,22 @@ fn patient_and_provider_can_view_without_grant() {
     let (client, patient, provider) = setup(&env);
     let sid = register_ct_chest(&env, &client, &patient, &provider);
 
-    client.track_study_views(&sid, &patient, &1_700_001_100_u64, &10_u32);
-    client.track_study_views(&sid, &provider, &1_700_001_200_u64, &5_u32);
+    env.ledger().set_timestamp(1_100);
+    client.track_study_views(
+        &sid,
+        &patient,
+        &String::from_str(&env, ""),
+        &1_100_u64,
+        &10_u32,
+    );
+    env.ledger().set_timestamp(1_200);
+    client.track_study_views(
+        &sid,
+        &provider,
+        &String::from_str(&env, ""),
+        &1_200_u64,
+        &5_u32,
+    );
 }
 
 #[test]
@@ -235,7 +257,13 @@ fn unauthorized_viewer_fails() {
     let sid = register_ct_chest(&env, &client, &patient, &provider);
     let stranger = Address::generate(&env);
 
-    let result = client.try_track_study_views(&sid, &stranger, &0_u64, &0_u32);
+    let result = client.try_track_study_views(
+        &sid,
+        &stranger,
+        &String::from_str(&env, "clinical-review"),
+        &0_u64,
+        &0_u32,
+    );
     assert!(result.is_err());
 }
 
@@ -320,7 +348,12 @@ fn search_studies_modality_filter() {
         end_date: None,
         has_critical_findings: None,
     };
-    let results = client.search_imaging_studies(&patient, &patient, &filters);
+    let results = client.search_imaging_studies(
+        &patient,
+        &patient,
+        &String::from_str(&env, ""),
+        &filters,
+    );
     assert_eq!(results.len(), 1);
 }
 
@@ -338,7 +371,12 @@ fn search_studies_wrong_modality_no_results() {
         end_date: None,
         has_critical_findings: None,
     };
-    let results = client.search_imaging_studies(&patient, &patient, &filters);
+    let results = client.search_imaging_studies(
+        &patient,
+        &patient,
+        &String::from_str(&env, ""),
+        &filters,
+    );
     assert_eq!(results.len(), 0);
 }
 
@@ -366,6 +404,214 @@ fn search_studies_critical_findings_filter() {
         end_date: None,
         has_critical_findings: Some(true),
     };
-    let results = client.search_imaging_studies(&patient, &patient, &filters);
+    let results = client.search_imaging_studies(
+        &patient,
+        &patient,
+        &String::from_str(&env, ""),
+        &filters,
+    );
     assert_eq!(results.len(), 1);
+}
+
+#[test]
+fn repeated_grant_deduplicates_by_viewer_and_purpose() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, patient, provider) = setup(&env);
+    let sid = register_ct_chest(&env, &client, &patient, &provider);
+    let viewer = Address::generate(&env);
+
+    client.grant_imaging_access(
+        &sid,
+        &patient,
+        &viewer,
+        &Symbol::new(&env, "view_only"),
+        &String::from_str(&env, "tumor-board"),
+        &Some(1_700_100_000_u64),
+    );
+    client.grant_imaging_access(
+        &sid,
+        &patient,
+        &viewer,
+        &Symbol::new(&env, "download"),
+        &String::from_str(&env, "tumor-board"),
+        &Some(1_700_200_000_u64),
+    );
+
+    let grants = client.get_access_grants(&sid, &patient);
+    assert_eq!(grants.len(), 1);
+    let grant = grants.get(0).unwrap();
+    assert_eq!(grant.access_type, Symbol::new(&env, "download"));
+    assert_eq!(grant.purpose, String::from_str(&env, "tumor-board"));
+    assert_eq!(grant.expires_at, Some(1_700_200_000_u64));
+}
+
+#[test]
+fn revoked_grant_blocks_subsequent_reads() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, patient, provider) = setup(&env);
+    let sid = register_ct_chest(&env, &client, &patient, &provider);
+    let viewer = Address::generate(&env);
+
+    client.grant_imaging_access(
+        &sid,
+        &patient,
+        &viewer,
+        &Symbol::new(&env, "view_only"),
+        &String::from_str(&env, "qa-review"),
+        &None,
+    );
+    client.revoke_imaging_access(
+        &sid,
+        &patient,
+        &viewer,
+        &String::from_str(&env, "qa-review"),
+    );
+
+    env.ledger().set_timestamp(1_500);
+    let result = client.try_track_study_views(
+        &sid,
+        &viewer,
+        &String::from_str(&env, "qa-review"),
+        &1_500_u64,
+        &15_u32,
+    );
+    assert!(matches!(result, Err(Ok(Error::GrantRevoked))));
+}
+
+#[test]
+fn wrong_purpose_cannot_use_grant() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, patient, provider) = setup(&env);
+    let sid = register_ct_chest(&env, &client, &patient, &provider);
+    let viewer = Address::generate(&env);
+
+    client.grant_imaging_access(
+        &sid,
+        &patient,
+        &viewer,
+        &Symbol::new(&env, "view_only"),
+        &String::from_str(&env, "care-coordination"),
+        &None,
+    );
+
+    env.ledger().set_timestamp(1_600);
+    let result = client.try_track_study_views(
+        &sid,
+        &viewer,
+        &String::from_str(&env, "research"),
+        &1_600_u64,
+        &12_u32,
+    );
+    assert!(matches!(result, Err(Ok(Error::Unauthorized))));
+}
+
+#[test]
+fn view_timestamp_outside_drift_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, patient, provider) = setup(&env);
+    let sid = register_ct_chest(&env, &client, &patient, &provider);
+    let viewer = Address::generate(&env);
+
+    client.grant_imaging_access(
+        &sid,
+        &patient,
+        &viewer,
+        &Symbol::new(&env, "view_only"),
+        &String::from_str(&env, "audit"),
+        &None,
+    );
+
+    env.ledger().set_timestamp(10_000);
+    let result = client.try_track_study_views(
+        &sid,
+        &viewer,
+        &String::from_str(&env, "audit"),
+        &9_699_u64, // 301s behind ledger time
+        &20_u32,
+    );
+    assert!(matches!(result, Err(Ok(Error::TimestampOutOfBounds))));
+}
+
+#[test]
+fn view_timestamp_must_be_monotonic_per_viewer_study() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, patient, provider) = setup(&env);
+    let sid = register_ct_chest(&env, &client, &patient, &provider);
+    let viewer = Address::generate(&env);
+
+    client.grant_imaging_access(
+        &sid,
+        &patient,
+        &viewer,
+        &Symbol::new(&env, "view_only"),
+        &String::from_str(&env, "audit"),
+        &None,
+    );
+
+    env.ledger().set_timestamp(2_000);
+    client.track_study_views(
+        &sid,
+        &viewer,
+        &String::from_str(&env, "audit"),
+        &2_000_u64,
+        &10_u32,
+    );
+
+    env.ledger().set_timestamp(2_010);
+    let result = client.try_track_study_views(
+        &sid,
+        &viewer,
+        &String::from_str(&env, "audit"),
+        &2_000_u64,
+        &8_u32,
+    );
+    assert!(matches!(result, Err(Ok(Error::NonMonotonicViewTimestamp))));
+}
+
+#[test]
+fn view_records_include_hash_chain_links() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, patient, provider) = setup(&env);
+    let sid = register_ct_chest(&env, &client, &patient, &provider);
+    let viewer = Address::generate(&env);
+
+    client.grant_imaging_access(
+        &sid,
+        &patient,
+        &viewer,
+        &Symbol::new(&env, "view_only"),
+        &String::from_str(&env, "audit"),
+        &None,
+    );
+
+    env.ledger().set_timestamp(3_000);
+    client.track_study_views(
+        &sid,
+        &viewer,
+        &String::from_str(&env, "audit"),
+        &3_000_u64,
+        &7_u32,
+    );
+    env.ledger().set_timestamp(3_020);
+    client.track_study_views(
+        &sid,
+        &viewer,
+        &String::from_str(&env, "audit"),
+        &3_020_u64,
+        &9_u32,
+    );
+
+    let logs = client.get_study_view_logs(&sid);
+    assert_eq!(logs.len(), 2);
+
+    let first = logs.get(0).unwrap();
+    assert!(first.previous_entry_hash.is_none());
+    let second = logs.get(1).unwrap();
+    assert_eq!(second.previous_entry_hash, Some(first.entry_hash.clone()));
 }

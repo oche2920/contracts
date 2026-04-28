@@ -1,4 +1,4 @@
-use soroban_sdk::{contracterror, contracttype, Address, String, Symbol};
+use soroban_sdk::{contracterror, contracttype, Address, BytesN, String, Symbol};
 
 #[contracterror]
 #[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
@@ -8,6 +8,9 @@ pub enum Error {
     VisitNotFound = 2,
     InvalidStatusTransition = 3,
     IneligibleLocation = 4,
+    SessionExpired = 5,
+    InvalidSessionToken = 6,
+    SessionAlreadyUsed = 7,
 }
 
 #[contracttype]
@@ -53,7 +56,19 @@ pub struct PrescriptionRequest {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionRecord {
+    pub token_hash: BytesN<32>,
+    pub visit_id: u64,
+    pub caller: Address,
+    pub expires_at: u64,
+    pub used: bool,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
     VirtualVisit(u64),
     VisitCount,
+    SessionNonce,
+    Session(u64),
 }

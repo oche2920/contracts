@@ -8,11 +8,50 @@ mod types;
 #[cfg(test)]
 mod test;
 
-use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, String, Symbol, Vec};
+use soroban_sdk::{contract, contractimpl, Address, Bytes, BytesN, Env, String, Symbol, Vec};
 use storage::*;
 use types::*;
 
 const MAX_APPEAL_LEVEL: u32 = 3;
+
+fn compute_review_entry_hash(env: &Env, review: &ReviewRecord) -> BytesN<32> {
+    let mut data = Bytes::new(env);
+    data.extend_from_array(&review.review_id.to_be_bytes());
+    data.extend_from_array(&review.auth_request_id.to_be_bytes());
+    data.append(&review.reviewer_id.clone().to_xdr(env));
+    data.append(&review.decision.clone().to_xdr(env));
+    data.append(&review.review_notes_hash.clone().to_xdr(env));
+    if let Some(prev_hash) = &review.prior_review_hash {
+        data.append(&prev_hash.clone().to_xdr(env));
+    }
+    data.extend_from_array(&review.timestamp.to_be_bytes());
+    env.crypto().sha256(&data)
+}
+
+fn compute_appeal_chain_hash(
+    env: &Env,
+    previous_appeal_hash: Option<BytesN<32>>,
+    ruling_dependency_hash: BytesN<32>,
+    appeal_reason_hash: BytesN<32>,
+    additional_evidence_hash: Option<BytesN<32>>,
+    provider_id: &Address,
+    appeal_level: u32,
+    submitted_at: u64,
+) -> BytesN<32> {
+    let mut data = Bytes::new(env);
+    if let Some(prev) = previous_appeal_hash {
+        data.append(&prev.clone().to_xdr(env));
+    }
+    data.append(&ruling_dependency_hash.clone().to_xdr(env));
+    data.append(&appeal_reason_hash.clone().to_xdr(env));
+    if let Some(additional) = additional_evidence_hash {
+        data.append(&additional.clone().to_xdr(env));
+    }
+    data.append(&provider_id.clone().to_xdr(env));
+    data.extend_from_array(&appeal_level.to_be_bytes());
+    data.extend_from_array(&submitted_at.to_be_bytes());
+    env.crypto().sha256(&data)
+}
 
 #[contract]
 pub struct PriorAuthorizationContract;
@@ -36,6 +75,25 @@ impl PriorAuthorizationContract {
 
         let auth_request_id = next_auth_id(&env);
 
+        // Calculate SLA deadline based on urgency
+        let sla_config = load_sla_config(&env, &urgency).unwrap_or(SLAConfig {
+            urgency: urgency.clone(),
+            standard_deadline_hours: 72,  // 3 days default
+            expedited_deadline_hours: 24, // 1 day default
+            auto_approval_threshold: 30,  // 30 days default
+            requires_medical_director: false,
+        });
+
+        let is_expedited =
+            urgency == Symbol::new(&env, "urgent") || urgency == Symbol::new(&env, "emergency");
+        let deadline_hours = if is_expedited {
+            sla_config.expedited_deadline_hours
+        } else {
+            sla_config.standard_deadline_hours
+        };
+
+        let sla_deadline = env.ledger().timestamp() + (deadline_hours * 3600); // Convert hours to seconds
+
         let req = AuthorizationRequest {
             auth_request_id,
             provider_id: provider_id.clone(),
@@ -46,7 +104,7 @@ impl PriorAuthorizationContract {
             service_codes,
             diagnosis_codes,
             clinical_justification_hash,
-            urgency,
+            urgency: urgency.clone(),
             status: AuthStatus::Submitted,
             decision: None,
             approved_units: None,
@@ -55,7 +113,11 @@ impl PriorAuthorizationContract {
             valid_until: None,
             submitted_at: env.ledger().timestamp(),
             decision_date: None,
-            expedited: false,
+            expedited: is_expedited,
+            reviewer_id: None,
+            reviewer_role: None,
+            sla_deadline,
+            auto_review_eligible: !sla_config.requires_medical_director,
         };
 
         save_auth_request(&env, &req);
@@ -64,7 +126,7 @@ impl PriorAuthorizationContract {
 
         env.events().publish(
             (Symbol::new(&env, "auth_submitted"),),
-            (auth_request_id, provider_id, patient_id),
+            (auth_request_id, provider_id, patient_id, sla_deadline),
         );
 
         Ok(auth_request_id)
@@ -80,8 +142,7 @@ impl PriorAuthorizationContract {
     ) -> Result<(), Error> {
         provider_id.require_auth();
 
-        let req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         if req.provider_id != provider_id {
             return Err(Error::Unauthorized);
@@ -120,8 +181,31 @@ impl PriorAuthorizationContract {
     ) -> Result<(), Error> {
         reviewer_id.require_auth();
 
-        let mut req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let mut req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
+
+        // Validate reviewer authorization
+        let reviewer = load_reviewer(&env, &reviewer_id).ok_or(Error::ReviewerNotFound)?;
+
+        if !reviewer.is_active {
+            return Err(Error::ReviewerNotAuthorized);
+        }
+
+        // Check if reviewer has expired
+        if let Some(expires_at) = reviewer.expires_at {
+            if env.ledger().timestamp() > expires_at {
+                return Err(Error::ReviewerNotAuthorized);
+            }
+        }
+
+        // Validate reviewer role and case load
+        if reviewer.current_cases >= reviewer.max_cases {
+            return Err(Error::SLAViolation);
+        }
+
+        // Check SLA deadline compliance
+        if env.ledger().timestamp() > req.sla_deadline {
+            return Err(Error::DeadlineExceeded);
+        }
 
         // Only Submitted, UnderReview, or MoreInfoNeeded can be reviewed
         match req.status {
@@ -132,32 +216,90 @@ impl PriorAuthorizationContract {
             _ => return Err(Error::InvalidStatusTransition),
         }
 
+        // Validate reviewer role requirements
+        let medical_director_role = Symbol::new(&env, "medical_director");
+        let specialist_role = Symbol::new(&env, "specialist");
+        let reviewer_role_sym = Symbol::new(&env, "reviewer");
+        let case_manager_role = Symbol::new(&env, "case_manager");
+
+        // Check if medical director is required for this type
+        let sla_config = load_sla_config(&env, &req.urgency);
+        if let Some(config) = sla_config {
+            if config.requires_medical_director && reviewer.role != medical_director_role {
+                return Err(Error::InvalidReviewerRole);
+            }
+        }
+
         let approved_sym = Symbol::new(&env, "approved");
         let denied_sym = Symbol::new(&env, "denied");
         let more_info_sym = Symbol::new(&env, "more_info_needed");
 
+        // Update reviewer case count
+        update_reviewer_case_count(&env, &reviewer_id, 1)?;
+
         if decision == approved_sym {
             req.status = AuthStatus::Approved;
             req.approved_units = approved_units;
-            req.valid_from = valid_from;
-            req.valid_until = valid_until;
+            req.valid_from = valid_from.or(Some(env.ledger().timestamp()));
+            req.valid_until = valid_until.or(Some(env.ledger().timestamp() + (30 * 24 * 60 * 60))); // 30 days default
             req.decision_date = Some(env.ledger().timestamp());
+
+            // Remove from overdue tracking if present
+            remove_overdue_auth(&env, auth_request_id);
         } else if decision == denied_sym {
             req.status = AuthStatus::Denied;
             req.decision_date = Some(env.ledger().timestamp());
+
+            // Remove from overdue tracking if present
+            remove_overdue_auth(&env, auth_request_id);
         } else if decision == more_info_sym {
             req.status = AuthStatus::MoreInfoNeeded;
         } else {
+            // Revert case count increment for invalid decision
+            update_reviewer_case_count(&env, &reviewer_id, -1)?;
             return Err(Error::InvalidDecision);
         }
 
+        req.reviewer_id = Some(reviewer_id.clone());
+        req.reviewer_role = Some(reviewer.role.clone());
+
         req.decision = Some(decision.clone());
+
+        // Persist review history in an append-only sequence.
+        let history = load_review_history(&env, auth_request_id);
+        let prior_review_hash = if history.is_empty() {
+            None
+        } else {
+            let last_review = history
+                .get(history.len() - 1)
+                .ok_or(Error::ReviewNotFound)?;
+            Some(last_review.review_entry_hash.clone())
+        };
+        let review_notes_hash = env.crypto().sha256(&review_notes.clone().to_xdr(&env));
+        let review_id = next_review_id(&env);
+        let mut review_record = ReviewRecord {
+            review_id,
+            auth_request_id,
+            reviewer_id: reviewer_id.clone(),
+            decision: decision.clone(),
+            review_notes_hash,
+            prior_review_hash,
+            review_entry_hash: BytesN::from_array(&env, &[0u8; 32]),
+            timestamp: env.ledger().timestamp(),
+        };
+        review_record.review_entry_hash = compute_review_entry_hash(&env, &review_record);
+        save_review_record(&env, &review_record);
 
         save_auth_request(&env, &req);
 
         env.events().publish(
             (Symbol::new(&env, "auth_reviewed"),),
-            (auth_request_id, decision, reviewer_id),
+            (
+                auth_request_id,
+                decision,
+                reviewer_id,
+                review_record.review_entry_hash,
+            ),
         );
 
         Ok(())
@@ -173,8 +315,7 @@ impl PriorAuthorizationContract {
     ) -> Result<(), Error> {
         provider_id.require_auth();
 
-        let mut req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let mut req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         if req.provider_id != provider_id {
             return Err(Error::Unauthorized);
@@ -196,7 +337,10 @@ impl PriorAuthorizationContract {
         save_peer_to_peer(&env, &p2p);
 
         // Transition to UnderReview if still in Submitted state
-        if matches!(req.status, AuthStatus::Submitted | AuthStatus::MoreInfoNeeded) {
+        if matches!(
+            req.status,
+            AuthStatus::Submitted | AuthStatus::MoreInfoNeeded
+        ) {
             req.status = AuthStatus::UnderReview;
             save_auth_request(&env, &req);
         }
@@ -219,11 +363,9 @@ impl PriorAuthorizationContract {
     ) -> Result<(), Error> {
         insurance_admin.require_auth();
 
-        load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
-        let mut p2p = load_peer_to_peer(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let mut p2p = load_peer_to_peer(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         p2p.scheduled_time = Some(scheduled_time);
         p2p.medical_director = Some(medical_director.clone());
@@ -231,7 +373,7 @@ impl PriorAuthorizationContract {
         save_peer_to_peer(&env, &p2p);
 
         // Update auth status
-        let mut req = load_auth_request(&env, auth_request_id).unwrap();
+        let mut req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
         req.status = AuthStatus::PeerToPeerScheduled;
         save_auth_request(&env, &req);
 
@@ -254,8 +396,7 @@ impl PriorAuthorizationContract {
     ) -> Result<u64, Error> {
         provider_id.require_auth();
 
-        let mut req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let mut req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         if req.provider_id != provider_id {
             return Err(Error::Unauthorized);
@@ -274,13 +415,59 @@ impl PriorAuthorizationContract {
         // Verify level increases monotonically
         let existing = load_appeals_for_auth(&env, auth_request_id);
         if !existing.is_empty() {
-            let last = existing.get(existing.len() - 1).unwrap();
+            let last = existing
+                .get(existing.len() - 1)
+                .ok_or(Error::AppealNotFound)?;
             if appeal_level <= last.appeal_level {
                 return Err(Error::MaxAppealLevelReached);
             }
         }
 
         let appeal_id = next_appeal_id(&env);
+
+        let previous_appeal_id = if existing.is_empty() {
+            None
+        } else {
+            Some(
+                existing
+                    .get(existing.len() - 1)
+                    .ok_or(Error::AppealNotFound)?
+                    .appeal_id,
+            )
+        };
+        let previous_appeal_hash = if existing.is_empty() {
+            None
+        } else {
+            Some(
+                existing
+                    .get(existing.len() - 1)
+                    .ok_or(Error::AppealNotFound)?
+                    .appeal_chain_hash
+                    .clone(),
+            )
+        };
+
+        let review_history = load_review_history(&env, auth_request_id);
+        let ruling_dependency_hash = if review_history.is_empty() {
+            env.crypto().sha256(&Bytes::new(&env))
+        } else {
+            review_history
+                .get(review_history.len() - 1)
+                .ok_or(Error::ReviewNotFound)?
+                .review_entry_hash
+                .clone()
+        };
+
+        let appeal_chain_hash = compute_appeal_chain_hash(
+            &env,
+            previous_appeal_hash.clone(),
+            ruling_dependency_hash.clone(),
+            appeal_reason_hash.clone(),
+            additional_evidence_hash.clone(),
+            &provider_id,
+            appeal_level,
+            env.ledger().timestamp(),
+        );
 
         let appeal = Appeal {
             appeal_id,
@@ -290,6 +477,10 @@ impl PriorAuthorizationContract {
             appeal_reason_hash,
             additional_evidence_hash,
             submitted_at: env.ledger().timestamp(),
+            previous_appeal_id,
+            previous_appeal_hash,
+            ruling_dependency_hash,
+            appeal_chain_hash,
         };
 
         save_appeal(&env, &appeal);
@@ -315,8 +506,7 @@ impl PriorAuthorizationContract {
     ) -> Result<(), Error> {
         provider_id.require_auth();
 
-        let mut req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let mut req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         if req.provider_id != provider_id {
             return Err(Error::Unauthorized);
@@ -333,7 +523,11 @@ impl PriorAuthorizationContract {
 
         env.events().publish(
             (Symbol::new(&env, "auth_expedited"),),
-            (auth_request_id, expected_service_date, urgency_justification),
+            (
+                auth_request_id,
+                expected_service_date,
+                urgency_justification,
+            ),
         );
 
         Ok(())
@@ -349,8 +543,7 @@ impl PriorAuthorizationContract {
     ) -> Result<(), Error> {
         provider_id.require_auth();
 
-        let req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         if req.provider_id != provider_id {
             return Err(Error::Unauthorized);
@@ -388,8 +581,7 @@ impl PriorAuthorizationContract {
     ) -> Result<(), Error> {
         provider_id.require_auth();
 
-        let mut req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let mut req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         if req.provider_id != provider_id {
             return Err(Error::Unauthorized);
@@ -444,8 +636,7 @@ impl PriorAuthorizationContract {
     ) -> Result<AuthorizationInfo, Error> {
         requester.require_auth();
 
-        let req = load_auth_request(&env, auth_request_id)
-            .ok_or(Error::AuthRequestNotFound)?;
+        let req = load_auth_request(&env, auth_request_id).ok_or(Error::AuthRequestNotFound)?;
 
         Ok(AuthorizationInfo {
             auth_request_id: req.auth_request_id,
@@ -461,5 +652,25 @@ impl PriorAuthorizationContract {
             submitted_at: req.submitted_at,
             decision_date: req.decision_date,
         })
+    }
+
+    /// Return the full appeal timeline for an authorization request.
+    pub fn get_appeal_history(
+        env: Env,
+        auth_request_id: u64,
+        requester: Address,
+    ) -> Result<Vec<Appeal>, Error> {
+        requester.require_auth();
+        Ok(load_appeals_for_auth(&env, auth_request_id))
+    }
+
+    /// Return the full review history for an authorization request.
+    pub fn get_review_history(
+        env: Env,
+        auth_request_id: u64,
+        requester: Address,
+    ) -> Result<Vec<ReviewRecord>, Error> {
+        requester.require_auth();
+        Ok(load_review_history(&env, auth_request_id))
     }
 }

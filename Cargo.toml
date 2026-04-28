@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "contracts",
+  "contracts/health-records",
   "contracts/patient-registry",
   "contracts/hospital-registry",
   "contracts/insurer-registry",
@@ -35,7 +36,7 @@ members = [
   "contracts/provider-registry",
   "contracts/multisig-governance",
   "contracts/upgrade-governance",
-  "contracts/zk-eligibility-verifier",
+  "contracts/zk-eligibility",
 ]
 exclude = ["contracts/patient-registry/benches"]
 

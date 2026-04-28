@@ -7,6 +7,7 @@ pub enum Error {
     Unauthorized = 1,
     NotFound = 2,
     InvalidParameter = 3,
+    InvalidPage = 4,
 }
 
 #[contracttype]
@@ -47,6 +48,11 @@ pub struct VitalStatistics {
     pub count: u32,
 }
 
+/// Window index = timestamp / WINDOW_SECONDS
+pub const RAW_WINDOW_SECONDS: u64 = 3600;   // 1-hour raw buckets
+pub const AGG_WINDOW_SECONDS: u64 = 86400;  // 24-hour aggregate buckets
+pub const PAGE_SIZE: u32 = 50;
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {
@@ -54,6 +60,43 @@ pub enum DataKey {
     MonitoringParams(Address, Symbol), // map to MonitoringParameters
     DeviceReg(Address, String),        // map to DeviceRegistration
     VitalsAlerts(Address, Symbol),     // map to Vec<VitalAlert>
+    /// Raw readings bucketed by hour window index
+    RawWindow(Address, u64),
+    /// Aggregated stats bucketed by day window index
+    AggWindow(Address, u64),
+    /// Tracks the latest raw window index written for a patient
+    LatestRawWindow(Address),
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VitalsAggregate {
+    pub window_start: u64,
+    pub window_end: u64,
+    pub count: u32,
+    pub min_heart_rate: Option<u32>,
+    pub max_heart_rate: Option<u32>,
+    pub avg_heart_rate: Option<u32>,
+    pub min_systolic: Option<u32>,
+    pub max_systolic: Option<u32>,
+    pub avg_systolic: Option<u32>,
+    pub min_oxygen_sat: Option<u32>,
+    pub max_oxygen_sat: Option<u32>,
+    pub avg_oxygen_sat: Option<u32>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PagedRawResult {
+    pub readings: soroban_sdk::Vec<VitalReading>,
+    pub next_page: Option<u32>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PagedAggResult {
+    pub aggregates: soroban_sdk::Vec<VitalsAggregate>,
+    pub next_page: Option<u32>,
 }
 
 #[contracttype]

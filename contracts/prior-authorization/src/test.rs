@@ -1,4 +1,6 @@
 #![cfg(test)]
+mod test;
+mod test_enhanced;
 
 use super::*;
 use soroban_sdk::{testutils::Address as _, Address, BytesN, Env, String, Symbol, Vec};
@@ -440,6 +442,46 @@ fn test_appeal_with_additional_evidence() {
     client
         .appeal_denial(&id, &provider, &1u32, &reason_hash, &Some(evidence_hash))
         .unwrap();
+}
+
+#[test]
+fn test_review_history_and_appeal_chain_is_tamper_evident() {
+    let (env, provider, patient) = setup();
+    let client = register_contract(&env);
+    let id = submit(&env, &client, &provider, &patient);
+    let reviewer = Address::generate(&env);
+
+    client
+        .review_authorization(
+            &id,
+            &reviewer,
+            &Symbol::new(&env, "denied"),
+            &None,
+            &None,
+            &None,
+            &String::from_str(&env, "Initial denial based on policy criteria"),
+        )
+        .unwrap();
+
+    let review_history = client.get_review_history(&id, &provider).unwrap();
+    assert_eq!(review_history.len(), 1);
+    let first_review = review_history.get(0).unwrap();
+    assert_eq!(first_review.reviewer_id, reviewer);
+    assert!(first_review.prior_review_hash.is_none());
+    assert_ne!(first_review.review_entry_hash, BytesN::from_array(&env, &[0u8; 32]));
+
+    let reason_hash = BytesN::from_array(&env, &[13u8; 32]);
+    client
+        .appeal_denial(&id, &provider, &1u32, &reason_hash, &None)
+        .unwrap();
+
+    let appeals = client.get_appeal_history(&id, &provider).unwrap();
+    assert_eq!(appeals.len(), 1);
+    let first_appeal = appeals.get(0).unwrap();
+    assert!(first_appeal.previous_appeal_id.is_none());
+    assert!(first_appeal.previous_appeal_hash.is_none());
+    assert_eq!(first_appeal.ruling_dependency_hash, first_review.review_entry_hash);
+    assert_ne!(first_appeal.appeal_chain_hash, BytesN::from_array(&env, &[0u8; 32]));
 }
 
 // -----------------------------------------------------------------------

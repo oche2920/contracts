@@ -31,7 +31,7 @@ fn test_order_imaging_study() {
     assert_eq!(order_id, 1);
 
     // Verify order was created
-    let order = client.get_imaging_order(&order_id).unwrap();
+    let order = client.get_imaging_order(&order_id, &patient).unwrap();
     assert_eq!(order.provider_id, provider);
     assert_eq!(order.patient_id, patient);
     assert_eq!(order.study_type, study_type);
@@ -75,7 +75,7 @@ fn test_multiple_imaging_orders() {
     assert_eq!(order_id2, 2);
 
     // Verify patient has both orders
-    let patient_orders = client.get_patient_orders(&patient);
+    let patient_orders = client.get_patient_orders(&patient, &patient);
     assert_eq!(patient_orders.len(), 2);
 }
 
@@ -108,12 +108,12 @@ fn test_schedule_imaging() {
     client.schedule_imaging(&order_id, &imaging_center, &scheduled_time, &prep_hash);
 
     // Verify schedule
-    let schedule = client.get_imaging_schedule(&order_id).unwrap();
+    let schedule = client.get_imaging_schedule(&order_id, &patient).unwrap();
     assert_eq!(schedule.imaging_center, imaging_center);
     assert_eq!(schedule.scheduled_time, scheduled_time);
 
     // Verify order status updated
-    let order = client.get_imaging_order(&order_id).unwrap();
+    let order = client.get_imaging_order(&order_id, &patient).unwrap();
     assert_eq!(order.status, Symbol::new(&env, "SCHEDULED"));
 }
 
@@ -189,12 +189,12 @@ fn test_upload_images() {
     );
 
     // Verify images uploaded
-    let images = client.get_dicom_images(&order_id).unwrap();
+    let images = client.get_dicom_images(&order_id, &patient).unwrap();
     assert_eq!(images.dicom_hash, dicom_hash);
     assert_eq!(images.image_count, 150);
 
     // Verify order status updated
-    let order = client.get_imaging_order(&order_id).unwrap();
+    let order = client.get_imaging_order(&order_id, &patient).unwrap();
     assert_eq!(order.status, Symbol::new(&env, "IN_PROGRESS"));
 }
 
@@ -267,7 +267,7 @@ fn test_submit_preliminary_report() {
     client.submit_preliminary_report(&order_id, &radiologist, &report_hash, &true);
 
     // Verify report
-    let report = client.get_preliminary_report(&order_id).unwrap();
+    let report = client.get_preliminary_report(&order_id, &patient).unwrap();
     assert_eq!(report.radiologist_id, radiologist);
     assert!(report.urgent_findings);
 }
@@ -338,12 +338,12 @@ fn test_submit_final_report() {
     client.submit_final_report(&order_id, &radiologist, &final_hash, &impression);
 
     // Verify final report
-    let report = client.get_final_report(&order_id).unwrap();
+    let report = client.get_final_report(&order_id, &patient).unwrap();
     assert_eq!(report.radiologist_id, radiologist);
     assert_eq!(report.impression, impression);
 
     // Verify order completed
-    let order = client.get_imaging_order(&order_id).unwrap();
+    let order = client.get_imaging_order(&order_id, &patient).unwrap();
     assert_eq!(order.status, Symbol::new(&env, "COMPLETED"));
 }
 
@@ -416,7 +416,7 @@ fn test_request_peer_review() {
     client.request_peer_review(&order_id, &radiologist1, &radiologist2);
 
     // Verify peer review request
-    let peer_review = client.get_peer_review(&order_id).unwrap();
+    let peer_review = client.get_peer_review(&order_id, &patient).unwrap();
     assert_eq!(peer_review.requesting_radiologist, radiologist1);
     assert_eq!(peer_review.peer_radiologist, radiologist2);
     assert_eq!(peer_review.status, Symbol::new(&env, "PENDING"));
@@ -484,7 +484,7 @@ fn test_get_patient_orders() {
     );
 
     // Get patient orders
-    let orders = client.get_patient_orders(&patient);
+    let orders = client.get_patient_orders(&patient, &patient);
     assert_eq!(orders.len(), 2);
     assert_eq!(orders.get(0).unwrap(), order_id1);
     assert_eq!(orders.get(1).unwrap(), order_id2);
@@ -523,7 +523,7 @@ fn test_get_provider_orders() {
     );
 
     // Get provider orders
-    let orders = client.get_provider_orders(&provider);
+    let orders = client.get_provider_orders(&provider, &provider);
     assert_eq!(orders.len(), 2);
     assert_eq!(orders.get(0).unwrap(), order_id1);
     assert_eq!(orders.get(1).unwrap(), order_id2);
@@ -553,7 +553,7 @@ fn test_complete_imaging_workflow() {
         &Symbol::new(&env, "URGENT"),
     );
 
-    let order = client.get_imaging_order(&order_id).unwrap();
+    let order = client.get_imaging_order(&order_id, &patient).unwrap();
     assert_eq!(order.status, Symbol::new(&env, "ORDERED"));
 
     // 2. Schedule imaging
@@ -561,7 +561,7 @@ fn test_complete_imaging_workflow() {
     let prep_hash = BytesN::from_array(&env, &[1u8; 32]);
     client.schedule_imaging(&order_id, &imaging_center, &scheduled_time, &prep_hash);
 
-    let order = client.get_imaging_order(&order_id).unwrap();
+    let order = client.get_imaging_order(&order_id, &patient).unwrap();
     assert_eq!(order.status, Symbol::new(&env, "SCHEDULED"));
 
     // 3. Upload images
@@ -574,20 +574,20 @@ fn test_complete_imaging_workflow() {
         &env.ledger().timestamp(),
     );
 
-    let order = client.get_imaging_order(&order_id).unwrap();
+    let order = client.get_imaging_order(&order_id, &patient).unwrap();
     assert_eq!(order.status, Symbol::new(&env, "IN_PROGRESS"));
 
     // 4. Submit preliminary report with urgent findings
     let prelim_hash = BytesN::from_array(&env, &[3u8; 32]);
     client.submit_preliminary_report(&order_id, &radiologist, &prelim_hash, &true);
 
-    let prelim = client.get_preliminary_report(&order_id).unwrap();
+    let prelim = client.get_preliminary_report(&order_id, &patient).unwrap();
     assert!(prelim.urgent_findings);
 
     // 5. Request peer review
     client.request_peer_review(&order_id, &radiologist, &peer_radiologist);
 
-    let peer_review = client.get_peer_review(&order_id).unwrap();
+    let peer_review = client.get_peer_review(&order_id, &patient).unwrap();
     assert_eq!(peer_review.status, Symbol::new(&env, "PENDING"));
 
     // 6. Submit final report
@@ -598,10 +598,10 @@ fn test_complete_imaging_workflow() {
     );
     client.submit_final_report(&order_id, &radiologist, &final_hash, &impression);
 
-    let order = client.get_imaging_order(&order_id).unwrap();
+    let order = client.get_imaging_order(&order_id, &patient).unwrap();
     assert_eq!(order.status, Symbol::new(&env, "COMPLETED"));
 
-    let final_report = client.get_final_report(&order_id).unwrap();
+    let final_report = client.get_final_report(&order_id, &patient).unwrap();
     assert_eq!(final_report.radiologist_id, radiologist);
 }
 
@@ -638,7 +638,7 @@ fn test_multi_modality_support() {
             &Symbol::new(&env, "ROUTINE"),
         );
 
-        let order = client.get_imaging_order(&order_id).unwrap();
+        let order = client.get_imaging_order(&order_id, &patient).unwrap();
         assert_eq!(order.study_type, modality);
     }
 }
@@ -673,7 +673,7 @@ fn test_priority_levels() {
             &priority,
         );
 
-        let order = client.get_imaging_order(&order_id).unwrap();
+        let order = client.get_imaging_order(&order_id, &patient).unwrap();
         assert_eq!(order.priority, priority);
     }
 }
@@ -716,10 +716,10 @@ fn test_urgent_findings_notification() {
     client.submit_preliminary_report(&order_id, &radiologist, &report_hash, &true);
 
     // Verify urgent findings flag
-    let prelim = client.get_preliminary_report(&order_id).unwrap();
+    let prelim = client.get_preliminary_report(&order_id, &patient).unwrap();
     assert!(prelim.urgent_findings);
 
     // Verify order priority
-    let order = client.get_imaging_order(&order_id).unwrap();
+    let order = client.get_imaging_order(&order_id, &patient).unwrap();
     assert_eq!(order.priority, Symbol::new(&env, "STAT"));
 }

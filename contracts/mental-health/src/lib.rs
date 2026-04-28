@@ -1,5 +1,6 @@
 #![no_std]
 #![allow(clippy::too_many_arguments)]
+#![allow(deprecated)]
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, vec, Address, BytesN, Env, String, Symbol,
@@ -117,6 +118,16 @@ pub struct Screening {
 }
 
 #[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConsentRecord {
+    pub patient_id: Address,
+    pub data_type: Symbol,
+    pub provider_id: Address,
+    pub consent_granted_at: u64,
+    pub consent_expires_at: Option<u64>,
+}
+
+#[contracttype]
 pub enum DataKey {
     AssessmentCounter,
     PlanCounter,
@@ -131,6 +142,7 @@ pub enum DataKey {
     Session(u64, u64),
     Symptom(Address, Symbol, u64),
     Outcomes(u64, u64),
+    Consent(Address, Symbol, Address),
 }
 
 #[contract]
@@ -138,6 +150,61 @@ pub struct MentalHealthContract;
 
 #[contractimpl]
 impl MentalHealthContract {
+    /// Validate explicit consent for sensitive data access
+    fn validate_explicit_consent(
+        env: &Env,
+        patient_id: &Address,
+        data_type: Symbol,
+        provider_id: &Address,
+    ) -> Result<(), Error> {
+        let consent_key = DataKey::Consent(patient_id.clone(), data_type, provider_id.clone());
+        let consent: Option<ConsentRecord> = env.storage().persistent().get(&consent_key);
+
+        match consent {
+            Some(record) => {
+                let now = env.ledger().timestamp();
+                if let Some(expires_at) = record.consent_expires_at {
+                    if now > expires_at {
+                        return Err(Error::RequiresExplicitConsent);
+                    }
+                }
+                Ok(())
+            }
+            None => Err(Error::RequiresExplicitConsent),
+        }
+    }
+
+    /// Grant explicit consent for sensitive data operations
+    pub fn grant_data_consent(
+        env: Env,
+        patient_id: Address,
+        data_type: Symbol,
+        provider_id: Address,
+        consent_expires_at: Option<u64>,
+    ) -> Result<(), Error> {
+        patient_id.require_auth();
+
+        let consent = ConsentRecord {
+            patient_id: patient_id.clone(),
+            data_type: data_type.clone(),
+            provider_id: provider_id.clone(),
+            consent_granted_at: env.ledger().timestamp(),
+            consent_expires_at,
+        };
+
+        env.storage().persistent().set(
+            &DataKey::Consent(patient_id.clone(), data_type.clone(), provider_id),
+            &consent,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "consent_granted"), data_type),
+            patient_id,
+        );
+
+        Ok(())
+    }
+
     pub fn conduct_mental_health_assessment(
         env: Env,
         patient_id: Address,
@@ -149,6 +216,14 @@ impl MentalHealthContract {
         _assessment_hash: BytesN<32>,
     ) -> Result<u64, Error> {
         provider_id.require_auth();
+
+        // Validate explicit consent for assessment
+        Self::validate_explicit_consent(
+            &env,
+            &patient_id,
+            Symbol::new(&env, "assessment"),
+            &provider_id,
+        )?;
 
         let mut count: u64 = env
             .storage()
@@ -231,16 +306,25 @@ impl MentalHealthContract {
     ) -> Result<(), Error> {
         provider_id.require_auth();
 
-        let mut assessment: MentalHealthAssessment = env
+        let assessment: MentalHealthAssessment = env
             .storage()
             .persistent()
             .get(&DataKey::Assessment(assessment_id))
             .ok_or(Error::NotFound)?;
 
-        assessment.suicide_risk_level = Some(risk_level);
+        // Validate explicit consent for suicide risk assessment
+        Self::validate_explicit_consent(
+            &env,
+            &assessment.patient_id,
+            Symbol::new(&env, "suicide_risk"),
+            &provider_id,
+        )?;
+
+        let mut updated_assessment = assessment;
+        updated_assessment.suicide_risk_level = Some(risk_level);
         env.storage()
             .persistent()
-            .set(&DataKey::Assessment(assessment_id), &assessment);
+            .set(&DataKey::Assessment(assessment_id), &updated_assessment);
 
         Ok(())
     }
@@ -256,6 +340,14 @@ impl MentalHealthContract {
         plan_hash: BytesN<32>,
     ) -> Result<u64, Error> {
         provider_id.require_auth();
+
+        // Validate explicit consent for safety plan
+        Self::validate_explicit_consent(
+            &env,
+            &patient_id,
+            Symbol::new(&env, "safety_plan"),
+            &provider_id,
+        )?;
 
         let mut count: u64 = env
             .storage()
@@ -295,6 +387,14 @@ impl MentalHealthContract {
     ) -> Result<u64, Error> {
         provider_id.require_auth();
 
+        // Validate explicit consent for treatment plan
+        Self::validate_explicit_consent(
+            &env,
+            &patient_id,
+            Symbol::new(&env, "treatment_plan"),
+            &provider_id,
+        )?;
+
         let mut count: u64 = env
             .storage()
             .instance()
@@ -331,6 +431,19 @@ impl MentalHealthContract {
         progress_notes_hash: BytesN<32>,
         homework_assigned: Option<String>,
     ) -> Result<(), Error> {
+        let plan: TreatmentPlan = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TreatmentPlan(treatment_plan_id))
+            .ok_or(Error::NotFound)?;
+
+        Self::validate_explicit_consent(
+            &env,
+            &plan.patient_id,
+            Symbol::new(&env, "therapy_session"),
+            &plan.provider_id,
+        )?;
+
         let session = TherapySession {
             treatment_plan_id,
             session_date,
@@ -345,17 +458,32 @@ impl MentalHealthContract {
             .persistent()
             .set(&DataKey::Session(treatment_plan_id, session_date), &session);
 
+        env.events().publish(
+            (Symbol::new(&env, "session_recorded"), treatment_plan_id),
+            plan.patient_id,
+        );
+
         Ok(())
     }
 
     pub fn track_symptom_severity(
         env: Env,
         patient_id: Address,
+        provider_id: Address,
         symptom_type: Symbol,
         severity_score: u32,
         measurement_date: u64,
         measurement_tool: Symbol,
     ) -> Result<(), Error> {
+        provider_id.require_auth();
+
+        Self::validate_explicit_consent(
+            &env,
+            &patient_id,
+            Symbol::new(&env, "symptom_severity"),
+            &provider_id,
+        )?;
+
         let symp = SymptomSeverity {
             patient_id: patient_id.clone(),
             symptom_type: symptom_type.clone(),
@@ -365,8 +493,13 @@ impl MentalHealthContract {
         };
 
         env.storage().persistent().set(
-            &DataKey::Symptom(patient_id, symptom_type, measurement_date),
+            &DataKey::Symptom(patient_id.clone(), symptom_type, measurement_date),
             &symp,
+        );
+
+        env.events().publish(
+            (Symbol::new(&env, "symptom_tracked"), measurement_date),
+            patient_id,
         );
 
         Ok(())
@@ -381,6 +514,14 @@ impl MentalHealthContract {
         facility_id: Address,
         discharge_date: Option<u64>,
     ) -> Result<u64, Error> {
+        // Validate explicit consent for hospitalization records
+        Self::validate_explicit_consent(
+            &env,
+            &patient_id,
+            Symbol::new(&env, "hospitalization"),
+            &facility_id,
+        )?;
+
         let mut count: u64 = env
             .storage()
             .instance()
@@ -417,18 +558,13 @@ impl MentalHealthContract {
     ) -> Result<u64, Error> {
         provider_id.require_auth();
 
-        let is_private = env
-            .storage()
-            .persistent()
-            .get(&DataKey::PrivacyFlag(
-                patient_id.clone(),
-                Symbol::new(&env, "substance_abuse"),
-            ))
-            .unwrap_or(false);
-
-        if is_private {
-            return Err(Error::RequiresExplicitConsent);
-        }
+        // Validate explicit consent for substance screening
+        Self::validate_explicit_consent(
+            &env,
+            &patient_id,
+            Symbol::new(&env, "substance_screening"),
+            &provider_id,
+        )?;
 
         let mut count: u64 = env
             .storage()
@@ -462,10 +598,29 @@ impl MentalHealthContract {
         outcome_measures: Vec<OutcomeMeasure>,
         _functional_improvement: bool,
     ) -> Result<(), Error> {
+        let plan: TreatmentPlan = env
+            .storage()
+            .persistent()
+            .get(&DataKey::TreatmentPlan(treatment_plan_id))
+            .ok_or(Error::NotFound)?;
+
+        Self::validate_explicit_consent(
+            &env,
+            &plan.patient_id,
+            Symbol::new(&env, "outcomes"),
+            &plan.provider_id,
+        )?;
+
         env.storage().persistent().set(
             &DataKey::Outcomes(treatment_plan_id, measurement_date),
             &outcome_measures,
         );
+
+        env.events().publish(
+            (Symbol::new(&env, "outcomes_tracked"), treatment_plan_id),
+            plan.patient_id,
+        );
+
         Ok(())
     }
 

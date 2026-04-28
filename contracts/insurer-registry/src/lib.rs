@@ -20,10 +20,6 @@ pub enum Error {
     NotAuthorized = 6,
 }
 
-/// --------------------
-/// Insurer Structures
-/// --------------------
-/// Represents insurance company information stored on-chain
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InsurerData {
@@ -32,15 +28,13 @@ pub struct InsurerData {
     pub contact_details: String,
     pub coverage_policies: String,
     pub metadata: String,
+    pub credential: CredentialAnchor,
 }
 
-/// --------------------
-/// Storage Keys
-/// --------------------
 #[contracttype]
 pub enum DataKey {
     Insurer(Address),
-    ClaimsReviewers(Address), // Maps insurer wallet to list of approved reviewers
+    ClaimsReviewers(Address),
 }
 
 #[contract]
@@ -63,6 +57,7 @@ impl InsurerRegistry {
         metadata: String,
     ) -> Result<(), Error> {
         wallet.require_auth();
+        issuer.require_auth();
 
         let key = DataKey::Insurer(wallet.clone());
         if env.storage().persistent().has(&key) {
@@ -75,14 +70,21 @@ impl InsurerRegistry {
             contact_details: String::from_str(&env, ""),
             coverage_policies: String::from_str(&env, ""),
             metadata,
+            credential: CredentialAnchor {
+                credential_hash,
+                issuer,
+                attestation_hash,
+                expires_at,
+                revocation_reference,
+                revoked_at: None,
+            },
         };
 
         env.storage().persistent().set(&key, &insurer);
-
-        // Initialize empty claims reviewers list
-        let reviewers_key = DataKey::ClaimsReviewers(wallet.clone());
-        let reviewers: Vec<Address> = Vec::new(&env);
-        env.storage().persistent().set(&reviewers_key, &reviewers);
+        env.storage().persistent().set(
+            &DataKey::ClaimsReviewers(wallet.clone()),
+            &Vec::<Address>::new(&env),
+        );
 
         env.events()
             .publish((symbol_short!("reg_ins"), wallet), symbol_short!("success"));
@@ -105,7 +107,9 @@ impl InsurerRegistry {
             .ok_or(Error::InsurerNotFound)?;
 
         insurer.metadata = metadata;
-        env.storage().persistent().set(&key, &insurer);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Insurer(wallet.clone()), &insurer);
 
         env.events()
             .publish((symbol_short!("upd_ins"), wallet), symbol_short!("success"));
@@ -132,7 +136,9 @@ impl InsurerRegistry {
             .ok_or(Error::InsurerNotFound)?;
 
         insurer.contact_details = contact_details;
-        env.storage().persistent().set(&key, &insurer);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Insurer(wallet.clone()), &insurer);
 
         env.events().publish(
             (symbol_short!("upd_cntct"), wallet),
@@ -161,7 +167,9 @@ impl InsurerRegistry {
             .ok_or(Error::InsurerNotFound)?;
 
         insurer.coverage_policies = coverage_policies;
-        env.storage().persistent().set(&key, &insurer);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Insurer(wallet.clone()), &insurer);
 
         env.events()
             .publish((symbol_short!("upd_cov"), wallet), symbol_short!("success"));
@@ -240,6 +248,7 @@ impl InsurerRegistry {
         reviewer_wallet: Address,
     ) -> Result<(), Error> {
         insurer_wallet.require_auth();
+        Self::assert_active_insurer(&env, &insurer_wallet)?;
 
         let reviewers_key = DataKey::ClaimsReviewers(insurer_wallet.clone());
         let reviewers: Vec<Address> = env
@@ -275,29 +284,13 @@ impl InsurerRegistry {
         Ok(())
     }
 
-    /// Get all authorized claims reviewers for an insurance company
-    ///
-    /// # Arguments
-    /// * `insurer_wallet` - The wallet address of the insurance company
-    ///
-    /// # Returns
-    /// Vector of authorized reviewer wallet addresses
     pub fn get_claims_reviewers(env: Env, insurer_wallet: Address) -> Vec<Address> {
-        let reviewers_key = DataKey::ClaimsReviewers(insurer_wallet);
         env.storage()
             .persistent()
             .get(&reviewers_key)
             .unwrap_or_else(|| Vec::new(&env))
     }
 
-    /// Check if a specific address is an authorized claims reviewer
-    ///
-    /// # Arguments
-    /// * `insurer_wallet` - The wallet address of the insurance company
-    /// * `reviewer_wallet` - The wallet address to check
-    ///
-    /// # Returns
-    /// True if the address is an authorized reviewer, false otherwise
     pub fn is_authorized_reviewer(
         env: Env,
         insurer_wallet: Address,

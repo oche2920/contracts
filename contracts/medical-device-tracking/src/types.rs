@@ -3,6 +3,7 @@ use soroban_sdk::{contracterror, contracttype, Address, BytesN, String, Symbol, 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DataKey {
+    Regulator,
     DeviceCounter,
     ImplantCounter,
     DmeCounter,
@@ -26,6 +27,8 @@ pub enum Error {
     NotAuthorized = 1,
     RecordNotFound = 2,
     DeviceNotActive = 3,
+    InvalidInput = 4,
+    AlreadyInitialized = 5,
 }
 
 #[contracttype]
@@ -34,6 +37,7 @@ pub struct DeviceRecord {
     pub device_id: u64,
     pub device_udi: String,
     pub device_type: Symbol,
+    pub manufacturer_id: Address,
     pub manufacturer: String,
     pub model_number: String,
     pub lot_number: String,
@@ -98,9 +102,12 @@ pub struct PerformanceReport {
 pub struct RecallInfo {
     pub recall_id: u64,
     pub device_ids: Vec<u64>,
+    pub issuer: Address,
+    pub issuer_role: Symbol,
     pub recall_reason: String,
     pub severity: Symbol,
     pub recall_date: u64,
     pub action_required: String,
     pub resolution_deadline: Option<u64>,
+    pub emergency_scope: Option<String>,
 }
