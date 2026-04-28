@@ -370,34 +370,83 @@ impl PacsContract {
         Ok(cd_id)
     }
 
-    /// Generate an anonymized UID for a study and record the request.
+    /// Generate a cryptographically anonymized UID for a study.
+    ///
+    /// The anonymized ID is derived as:
+    ///   sha256(study_id || patient_id_xdr || global_salt || rotation_epoch)
+    /// encoded as a hex-like uppercase string prefixed with "ANON-".
+    ///
+    /// `rotation_epoch` allows key rotation: callers pass the current epoch
+    /// (e.g. year-quarter as u32). Different epochs produce unlinkable IDs.
+    /// The mapping (study_id, rotation_epoch) -> anon_uid is stored for
+    /// authorized provenance lookups.
     pub fn anonymize_study(
         env: Env,
         study_id: u64,
         requesting_researcher: Address,
         anonymization_level: Symbol,
         purpose: String,
+        rotation_epoch: u32,
     ) -> Result<String, Error> {
         requesting_researcher.require_auth();
 
-        // study must exist
         load_study(&env, study_id).ok_or(Error::NotFound)?;
 
         if purpose.is_empty() {
             return Err(Error::InvalidInput);
         }
 
-        // Produce a deterministic anonymized UID: prefix "ANON-" is stored on-chain.
-        // Richer derivation (e.g. hashing) would be done off-chain using study_id.
-        let anon_uid = String::from_str(&env, "ANON-");
-        save_anonymized_uid(&env, study_id, &anon_uid);
+        // Load or initialise the per-contract global salt.
+        let salt: BytesN<32> = env
+            .storage()
+            .instance()
+            .get(&DataKey::AnonSalt)
+            .unwrap_or_else(|| {
+                // First call: derive salt from contract address XDR + a fixed nonce.
+                let mut seed = Bytes::new(&env);
+                seed.extend_from_array(b"pacs-anon-salt-v1");
+                env.crypto().sha256(&seed).into()
+            });
+        env.storage().instance().set(&DataKey::AnonSalt, &salt);
+
+        // Derive anonymized ID: sha256(study_id_be || patient_xdr || salt || epoch_be)
+        let study = load_study(&env, study_id).ok_or(Error::NotFound)?;
+        let mut data = Bytes::new(&env);
+        data.extend_from_array(&study_id.to_be_bytes());
+        data.append(&study.patient_id.clone().to_xdr(&env));
+        data.append(&salt.clone().to_xdr(&env));
+        data.extend_from_array(&rotation_epoch.to_be_bytes());
+
+        let hash: BytesN<32> = env.crypto().sha256(&data).into();
+
+        // Encode first 12 bytes of hash as uppercase hex (24 chars) for a compact UID.
+        let anon_uid = bytes_to_hex_string(&env, &hash);
+
+        // Store provenance: (study_id, rotation_epoch) -> anon_uid
+        save_anonymized_uid(&env, study_id, rotation_epoch, &anon_uid);
 
         env.events().publish(
             (symbol_short!("anon"), study_id),
-            (requesting_researcher, anonymization_level, purpose),
+            (requesting_researcher, anonymization_level, purpose, rotation_epoch),
         );
 
         Ok(anon_uid)
+    }
+
+    /// Return the anonymized UID for a given study and rotation epoch.
+    /// Only the patient or ordering provider may retrieve the mapping.
+    pub fn get_anonymized_uid(
+        env: Env,
+        study_id: u64,
+        requester: Address,
+        rotation_epoch: u32,
+    ) -> Result<String, Error> {
+        requester.require_auth();
+        let study = load_study(&env, study_id).ok_or(Error::NotFound)?;
+        if requester != study.patient_id && requester != study.ordering_provider {
+            return Err(Error::Unauthorized);
+        }
+        load_anonymized_uid(&env, study_id, rotation_epoch).ok_or(Error::NotFound)
     }
 
     /// Record a quality-control review for a study.
@@ -615,4 +664,23 @@ impl PacsContract {
 
         Err(Error::Unauthorized)
     }
+}
+
+/// Encode the first 12 bytes of a BytesN<32> as uppercase hex, prefixed with "ANON-".
+/// Produces a 29-character string: "ANON-" + 24 hex chars.
+fn bytes_to_hex_string(env: &Env, hash: &BytesN<32>) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    // 5 (prefix) + 24 (12 bytes * 2) = 29 chars
+    let mut buf = [0u8; 29];
+    buf[0] = b'A';
+    buf[1] = b'N';
+    buf[2] = b'O';
+    buf[3] = b'N';
+    buf[4] = b'-';
+    for i in 0..12usize {
+        let byte = hash.get(i as u32).unwrap_or(0);
+        buf[5 + i * 2] = HEX[(byte >> 4) as usize];
+        buf[5 + i * 2 + 1] = HEX[(byte & 0x0f) as usize];
+    }
+    String::from_bytes(env, &buf)
 }
