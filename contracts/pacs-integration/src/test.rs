@@ -303,8 +303,18 @@ fn anonymize_study_returns_uid() {
         &researcher,
         &Symbol::new(&env, "full"),
         &String::from_str(&env, "cancer study"),
+        &1_u32,
     );
     assert!(!uid.is_empty());
+    // Different epoch produces a different (unlinkable) UID.
+    let uid2 = client.anonymize_study(
+        &sid,
+        &researcher,
+        &Symbol::new(&env, "full"),
+        &String::from_str(&env, "cancer study"),
+        &2_u32,
+    );
+    assert_ne!(uid, uid2);
 }
 
 #[test]

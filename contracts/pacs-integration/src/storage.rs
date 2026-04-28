@@ -149,12 +149,18 @@ pub fn save_qc_review(env: &Env, review: &QcReview) {
         .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP_AMOUNT);
 }
 
-pub fn save_anonymized_uid(env: &Env, study_id: u64, uid: &String) {
-    let key = DataKey::AnonymizedStudy(study_id);
+pub fn save_anonymized_uid(env: &Env, study_id: u64, rotation_epoch: u32, uid: &String) {
+    let key = DataKey::AnonymizedStudy(study_id, rotation_epoch);
     env.storage().persistent().set(&key, uid);
     env.storage()
         .persistent()
         .extend_ttl(&key, LEDGER_THRESHOLD, LEDGER_BUMP_AMOUNT);
+}
+
+pub fn load_anonymized_uid(env: &Env, study_id: u64, rotation_epoch: u32) -> Option<String> {
+    env.storage()
+        .persistent()
+        .get(&DataKey::AnonymizedStudy(study_id, rotation_epoch))
 }
 
 pub fn save_cd_record(env: &Env, record: &CdRecord) {
