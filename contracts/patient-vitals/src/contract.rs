@@ -1,7 +1,7 @@
 use crate::types::{
     AlertThresholds, DataKey, DeviceReading, DeviceRegistration, Error, MonitoringParameters,
     PagedAggResult, PagedRawResult, Range, VitalAlert, VitalReading, VitalSigns, VitalStatistics,
-    VitalsAggregate, AGG_WINDOW_SECONDS, PAGE_SIZE, RAW_WINDOW_SECONDS,
+    VitalsAggregate, AGG_WINDOW_SECONDS, ALERT_COOLDOWN_SECONDS, PAGE_SIZE, RAW_WINDOW_SECONDS,
 };
 use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, String, Symbol, Vec};
 
@@ -59,9 +59,12 @@ impl PatientVitalsContract {
         env.storage().persistent().set(&key, &history);
 
         env.events().publish(
-            (symbol_short!("vital_rec"), patient_id),
+            (symbol_short!("vital_rec"), patient_id.clone()),
             (measurement_time, raw_idx, agg_idx),
         );
+
+        // Evaluate all configured thresholds and emit alerts if breached.
+        Self::evaluate_thresholds(&env, &patient_id, measurement_time, &vitals);
 
         Ok(history.len() as u64)
     }
@@ -136,9 +139,10 @@ impl PatientVitalsContract {
         for reading in readings.iter() {
             history.push_back(VitalReading {
                 measurement_time: reading.reading_time,
-                vitals: reading.values,
+                vitals: reading.values.clone(),
                 recorder: patient_id.clone(), // or device address
             });
+            Self::evaluate_thresholds(&env, &patient_id, reading.reading_time, &reading.values);
         }
 
         env.storage().persistent().set(&key, &history);
@@ -253,6 +257,102 @@ impl PatientVitalsContract {
             average_value: sum / valid_count,
             count: valid_count,
         })
+    }
+
+    /// Evaluate all configured monitoring parameters for a patient against the
+    /// supplied vitals. For each vital type that has a MonitoringParameters entry,
+    /// check the AlertThresholds and emit a deterministic VitalAlert if a threshold
+    /// is breached, subject to a per-(patient, vital_type) cooldown window.
+    fn evaluate_thresholds(env: &Env, patient_id: &Address, measurement_time: u64, vitals: &VitalSigns) {
+        let vital_types = [
+            Symbol::new(env, "heart_rate"),
+            Symbol::new(env, "bp_systolic"),
+            Symbol::new(env, "bp_diastolic"),
+            Symbol::new(env, "temperature"),
+            Symbol::new(env, "respiratory"),
+            Symbol::new(env, "oxygen_sat"),
+            Symbol::new(env, "blood_glucose"),
+            Symbol::new(env, "weight"),
+        ];
+
+        for vt in vital_types.iter() {
+            let params_key = DataKey::MonitoringParams(patient_id.clone(), vt.clone());
+            let params: Option<MonitoringParameters> =
+                env.storage().persistent().get(&params_key);
+            let params = match params {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let value = match Self::extract_vital_value(env, vitals, &vt) {
+                Some(v) => v,
+                None => continue,
+            };
+
+            let severity = Self::classify_severity(env, value, &params.alert_thresholds);
+            let severity = match severity {
+                Some(s) => s,
+                None => continue, // within normal range
+            };
+
+            // Cooldown check: suppress duplicate alerts within ALERT_COOLDOWN_SECONDS.
+            let cooldown_key = DataKey::LastAlertTime(patient_id.clone(), vt.clone());
+            let last_alert: u64 = env
+                .storage()
+                .persistent()
+                .get(&cooldown_key)
+                .unwrap_or(0);
+
+            if measurement_time < last_alert + ALERT_COOLDOWN_SECONDS {
+                continue; // still within cooldown window
+            }
+
+            // Record the alert.
+            let alert_key = DataKey::VitalsAlerts(patient_id.clone(), vt.clone());
+            let mut alerts: Vec<VitalAlert> = env
+                .storage()
+                .persistent()
+                .get(&alert_key)
+                .unwrap_or(Vec::new(env));
+
+            alerts.push_back(VitalAlert {
+                value: u32_to_string(env, value),
+                severity: severity.clone(),
+                alert_time: measurement_time,
+            });
+            env.storage().persistent().set(&alert_key, &alerts);
+            env.storage().persistent().set(&cooldown_key, &measurement_time);
+
+            env.events().publish(
+                (symbol_short!("vt_alert"), patient_id.clone(), vt.clone()),
+                (value, severity, measurement_time),
+            );
+        }
+    }
+
+    /// Return the severity Symbol for a value against thresholds, or None if in range.
+    fn classify_severity(env: &Env, value: u32, t: &AlertThresholds) -> Option<Symbol> {
+        if let Some(cl) = t.critical_low {
+            if value <= cl {
+                return Some(Symbol::new(env, "critical_lo"));
+            }
+        }
+        if let Some(ch) = t.critical_high {
+            if value >= ch {
+                return Some(Symbol::new(env, "critical_hi"));
+            }
+        }
+        if let Some(l) = t.low {
+            if value <= l {
+                return Some(Symbol::new(env, "low"));
+            }
+        }
+        if let Some(h) = t.high {
+            if value >= h {
+                return Some(Symbol::new(env, "high"));
+            }
+        }
+        None
     }
 
     fn extract_vital_value(env: &Env, vitals: &VitalSigns, vital_type: &Symbol) -> Option<u32> {
@@ -380,4 +480,21 @@ impl PatientVitalsContract {
         let next_page = if end < total_windows { Some(page + 1) } else { None };
         Ok(PagedAggResult { aggregates, next_page })
     }
+}
+
+/// Convert a u32 to a decimal Soroban String (no_std, no alloc).
+fn u32_to_string(env: &Env, mut n: u32) -> String {
+    let mut buf = [0u8; 10]; // max 10 decimal digits for u32
+    let mut pos = 10usize;
+    if n == 0 {
+        pos -= 1;
+        buf[pos] = b'0';
+    } else {
+        while n > 0 {
+            pos -= 1;
+            buf[pos] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+    }
+    String::from_bytes(env, &buf[pos..])
 }
