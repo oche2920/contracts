@@ -418,4 +418,175 @@ mod tests {
         assert_eq!(canceled_count, 1); // id2
         assert_eq!(completed_count, 1); // id1
     }
+
+    // =========================================================================
+    // safe_increment / safe_increment_persistent tests
+    // =========================================================================
+
+    #[test]
+    fn test_safe_increment_starts_at_one() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(HealthcareRegistry, ());
+
+        env.as_contract(&contract_id, || {
+            let id = safe_increment(&env, &DataKey::Admin); // reuse any key type
+            assert_eq!(id, 1);
+        });
+    }
+
+    #[test]
+    fn test_safe_increment_is_sequential() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(HealthcareRegistry, ());
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(safe_increment(&env, &DataKey::Admin), 1);
+            assert_eq!(safe_increment(&env, &DataKey::Admin), 2);
+            assert_eq!(safe_increment(&env, &DataKey::Admin), 3);
+        });
+    }
+
+    #[test]
+    fn test_safe_increment_persistent_starts_at_one() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(HealthcareRegistry, ());
+
+        env.as_contract(&contract_id, || {
+            let id = safe_increment_persistent(&env, &DataKey::Admin);
+            assert_eq!(id, 1);
+        });
+    }
+
+    #[test]
+    fn test_safe_increment_persistent_is_sequential() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(HealthcareRegistry, ());
+
+        env.as_contract(&contract_id, || {
+            assert_eq!(safe_increment_persistent(&env, &DataKey::Admin), 1);
+            assert_eq!(safe_increment_persistent(&env, &DataKey::Admin), 2);
+            assert_eq!(safe_increment_persistent(&env, &DataKey::Admin), 3);
+        });
+    }
+
+    #[test]
+    fn test_instance_and_persistent_counters_are_independent() {
+        // The same key in instance vs persistent storage must not share state.
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(HealthcareRegistry, ());
+
+        env.as_contract(&contract_id, || {
+            // Advance instance counter to 3.
+            safe_increment(&env, &DataKey::Admin);
+            safe_increment(&env, &DataKey::Admin);
+            safe_increment(&env, &DataKey::Admin);
+
+            // Persistent counter for the same key must still start at 1.
+            assert_eq!(safe_increment_persistent(&env, &DataKey::Admin), 1);
+        });
+    }
+
+    #[test]
+    fn test_safe_increment_ns_isolates_namespaces() {
+        use soroban_sdk::Symbol;
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(HealthcareRegistry, ());
+
+        env.as_contract(&contract_id, || {
+            let ns_a = Symbol::new(&env, "patient_a");
+            let ns_b = Symbol::new(&env, "patient_b");
+            let sub = Symbol::new(&env, "records");
+
+            // Advance patient_a counter to 5.
+            for _ in 0..5 {
+                safe_increment_ns(&env, &ns_a, &sub);
+            }
+
+            // patient_b counter must be independent and start at 1.
+            assert_eq!(safe_increment_ns(&env, &ns_b, &sub), 1);
+
+            // patient_a counter continues from 6.
+            assert_eq!(safe_increment_ns(&env, &ns_a, &sub), 6);
+        });
+    }
+
+    #[test]
+    fn test_safe_increment_persistent_ns_isolates_namespaces() {
+        use soroban_sdk::Symbol;
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(HealthcareRegistry, ());
+
+        env.as_contract(&contract_id, || {
+            let ns_a = Symbol::new(&env, "hosp_a");
+            let ns_b = Symbol::new(&env, "hosp_b");
+            let sub = Symbol::new(&env, "claims");
+
+            safe_increment_persistent_ns(&env, &ns_a, &sub);
+            safe_increment_persistent_ns(&env, &ns_a, &sub);
+
+            // hosp_b must start at 1 regardless of hosp_a's counter.
+            assert_eq!(safe_increment_persistent_ns(&env, &ns_b, &sub), 1);
+        });
+    }
+
+    #[test]
+    fn test_different_sub_keys_in_same_namespace_are_independent() {
+        use soroban_sdk::Symbol;
+
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(HealthcareRegistry, ());
+
+        env.as_contract(&contract_id, || {
+            let ns = Symbol::new(&env, "patient_x");
+            let sub_records = Symbol::new(&env, "records");
+            let sub_visits = Symbol::new(&env, "visits");
+
+            safe_increment_ns(&env, &ns, &sub_records);
+            safe_increment_ns(&env, &ns, &sub_records);
+
+            // visits counter for the same patient must start at 1.
+            assert_eq!(safe_increment_ns(&env, &ns, &sub_visits), 1);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "counter overflow")]
+    fn test_safe_increment_panics_on_overflow() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(HealthcareRegistry, ());
+
+        env.as_contract(&contract_id, || {
+            // Seed the counter at u64::MAX so the next increment overflows.
+            env.storage()
+                .instance()
+                .set(&DataKey::Admin, &u64::MAX);
+            safe_increment(&env, &DataKey::Admin);
+        });
+    }
+
+    #[test]
+    #[should_panic(expected = "counter overflow")]
+    fn test_safe_increment_persistent_panics_on_overflow() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(HealthcareRegistry, ());
+
+        env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .set(&DataKey::Admin, &u64::MAX);
+            safe_increment_persistent(&env, &DataKey::Admin);
+        });
+    }
 }

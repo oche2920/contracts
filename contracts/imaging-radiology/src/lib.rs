@@ -131,8 +131,7 @@ impl ImagingRadiology {
 
         // Get next order ID
         let counter_key = DataKey::OrderCounter;
-        let order_id: u64 = env.storage().persistent().get(&counter_key).unwrap_or(0) + 1;
-        env.storage().persistent().set(&counter_key, &order_id);
+        let order_id: u64 = shared_contracts::safe_increment_persistent(&env, &counter_key);
 
         // Create imaging order
         let order = ImagingOrder {

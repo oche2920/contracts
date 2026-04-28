@@ -102,6 +102,50 @@ pub struct AccessControl;
 
 #[contractimpl]
 impl AccessControl {
+    // -------------------------------------------------------------------------
+    // Internal role helpers
+    // -------------------------------------------------------------------------
+
+    /// Returns the stored `RoleAssignment` for `(address, role)` if it exists
+    /// **and** has not expired. Expired entries are treated as absent.
+    fn load_active_role(
+        env: &Env,
+        address: &Address,
+        role: &Role,
+    ) -> Option<RoleAssignment> {
+        let key = DataKey::RoleAssignment(address.clone(), role.clone());
+        let assignment: RoleAssignment = env.storage().persistent().get(&key)?;
+        let now = env.ledger().timestamp();
+        if assignment.expires_at != 0 && assignment.expires_at <= now {
+            return None;
+        }
+        Some(assignment)
+    }
+
+    /// Asserts that `caller` holds `role` (and the role has not expired).
+    /// Returns `InsufficientRole` if the check fails.
+    fn require_role(
+        env: &Env,
+        caller: &Address,
+        role: &Role,
+    ) -> Result<(), ContractError> {
+        // Admin always satisfies any role check.
+        let admin_opt: Option<Address> = env.storage().persistent().get(&DataKey::Admin);
+        if let Some(ref admin) = admin_opt {
+            if caller == admin {
+                return Ok(());
+            }
+        }
+        if Self::load_active_role(env, caller, role).is_some() {
+            return Ok(());
+        }
+        Err(ContractError::InsufficientRole)
+    }
+
+    // -------------------------------------------------------------------------
+    // Initialize
+    // -------------------------------------------------------------------------
+
     /// Initialize the contract with an admin
     pub fn initialize(env: Env, admin: Address) -> Result<(), ContractError> {
         if env.storage().persistent().has(&DataKey::Admin) {
@@ -110,9 +154,117 @@ impl AccessControl {
         admin.require_auth();
         env.storage().persistent().set(&DataKey::Admin, &admin);
 
+        // Bootstrap: give the admin the Admin role so role checks are uniform.
+        let bootstrap = RoleAssignment {
+            granted_by: admin.clone(),
+            granted_at: env.ledger().timestamp(),
+            expires_at: 0,
+        };
+        env.storage().persistent().set(
+            &DataKey::RoleAssignment(admin.clone(), Role::Admin),
+            &bootstrap,
+        );
+
         env.events()
             .publish((symbol_short!("init"), admin), symbol_short!("success"));
         Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Role management
+    // -------------------------------------------------------------------------
+
+    /// Grant `role` to `grantee`. Only an address that itself holds the
+    /// `Admin` role (or is the stored admin address) may call this.
+    ///
+    /// # Arguments
+    /// * `granter`    - Must hold the `Admin` role.
+    /// * `grantee`    - Address receiving the role.
+    /// * `role`       - The role to grant.
+    /// * `expires_at` - Expiry timestamp; pass `0` for no expiry.
+    pub fn grant_role(
+        env: Env,
+        granter: Address,
+        grantee: Address,
+        role: Role,
+        expires_at: u64,
+    ) -> Result<(), ContractError> {
+        granter.require_auth();
+        Self::require_role(&env, &granter, &Role::Admin)?;
+
+        let key = DataKey::RoleAssignment(grantee.clone(), role.clone());
+        if env.storage().persistent().has(&key) {
+            // Allow re-grant only if the existing assignment has expired.
+            if Self::load_active_role(&env, &grantee, &role).is_some() {
+                return Err(ContractError::RoleAlreadyGranted);
+            }
+        }
+
+        let assignment = RoleAssignment {
+            granted_by: granter.clone(),
+            granted_at: env.ledger().timestamp(),
+            expires_at,
+        };
+        env.storage().persistent().set(&key, &assignment);
+
+        env.events().publish(
+            (symbol_short!("role_grt"), grantee, role),
+            symbol_short!("success"),
+        );
+        Ok(())
+    }
+
+    /// Revoke `role` from `revokee`. Only an address that holds the `Admin`
+    /// role may call this.
+    ///
+    /// # Arguments
+    /// * `revoker`  - Must hold the `Admin` role.
+    /// * `revokee`  - Address losing the role.
+    /// * `role`     - The role to revoke.
+    pub fn revoke_role(
+        env: Env,
+        revoker: Address,
+        revokee: Address,
+        role: Role,
+    ) -> Result<(), ContractError> {
+        revoker.require_auth();
+        Self::require_role(&env, &revoker, &Role::Admin)?;
+
+        let key = DataKey::RoleAssignment(revokee.clone(), role.clone());
+        if !env.storage().persistent().has(&key) {
+            return Err(ContractError::RoleNotFound);
+        }
+        env.storage().persistent().remove(&key);
+
+        env.events().publish(
+            (symbol_short!("role_rev"), revokee, role),
+            symbol_short!("success"),
+        );
+        Ok(())
+    }
+
+    /// Returns `true` if `address` currently holds `role` (and it has not
+    /// expired). Does **not** require any auth — safe to call as a view.
+    pub fn has_role(env: Env, address: Address, role: Role) -> bool {
+        // Admin address always satisfies any role.
+        let admin_opt: Option<Address> = env.storage().persistent().get(&DataKey::Admin);
+        if let Some(ref admin) = admin_opt {
+            if &address == admin {
+                return true;
+            }
+        }
+        Self::load_active_role(&env, &address, &role).is_some()
+    }
+
+    /// Returns the full `RoleAssignment` for `(address, role)`, or an error
+    /// if the role was never granted or has expired.
+    pub fn get_role_assignment(
+        env: Env,
+        address: Address,
+        role: Role,
+    ) -> Result<RoleAssignment, ContractError> {
+        Self::load_active_role(&env, &address, &role)
+            .ok_or(ContractError::RoleNotFound)
     }
 
     /// Register a new entity in the system
