@@ -100,12 +100,7 @@ impl HealthRecords {
         }
 
         let counter_key = DataKey::RecordCounter;
-        let record_id: u64 = env
-            .storage()
-            .persistent()
-            .get(&counter_key)
-            .unwrap_or(0u64)
-            + 1;
+        let record_id: u64 = shared_contracts::safe_increment_persistent(&env, &counter_key);
 
         let timestamp = env.ledger().timestamp();
 
@@ -132,7 +127,6 @@ impl HealthRecords {
         env.storage()
             .persistent()
             .set(&DataKey::Record(record_id), &record);
-        env.storage().persistent().set(&counter_key, &record_id);
 
         Ok(record_id)
     }

@@ -1,3 +1,4 @@
+use shared_contracts::safe_increment_persistent;
 use soroban_sdk::{Address, Env, Vec};
 
 use crate::types::{
@@ -11,42 +12,15 @@ use crate::types::{
 // -----------------------------------------------------------------------
 
 pub fn next_assessment_id(env: &Env) -> u64 {
-    let id: u64 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::AssessmentCounter)
-        .unwrap_or(0);
-    let next = id + 1;
-    env.storage()
-        .persistent()
-        .set(&DataKey::AssessmentCounter, &next);
-    next
+    safe_increment_persistent(env, &DataKey::AssessmentCounter)
 }
 
 pub fn next_care_plan_id(env: &Env) -> u64 {
-    let id: u64 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::CarePlanCounter)
-        .unwrap_or(0);
-    let next = id + 1;
-    env.storage()
-        .persistent()
-        .set(&DataKey::CarePlanCounter, &next);
-    next
+    safe_increment_persistent(env, &DataKey::CarePlanCounter)
 }
 
 pub fn next_diet_order_id(env: &Env) -> u64 {
-    let id: u64 = env
-        .storage()
-        .persistent()
-        .get(&DataKey::DietOrderCounter)
-        .unwrap_or(0);
-    let next = id + 1;
-    env.storage()
-        .persistent()
-        .set(&DataKey::DietOrderCounter, &next);
-    next
+    safe_increment_persistent(env, &DataKey::DietOrderCounter)
 }
 
 // -----------------------------------------------------------------------

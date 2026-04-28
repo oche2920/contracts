@@ -327,3 +327,150 @@ fn test_expired_proposal_returns_error() {
         .unwrap();
     assert_eq!(err, Error::Expired);
 }
+
+// ── signer lifecycle: add ─────────────────────────────────────────────────────
+
+#[test]
+fn test_propose_add_signer_non_signer_returns_error() {
+    let (env, _signers, client) = setup(3, 2);
+    let stranger = Address::generate(&env);
+    let new_signer = Address::generate(&env);
+    let err = client
+        .try_propose_signer_change(&stranger, &SignerChangeKind::Add, &new_signer)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, Error::NotASigner);
+}
+
+#[test]
+fn test_propose_add_existing_signer_returns_error() {
+    let (env, signers, client) = setup(3, 2);
+    let s0 = signers.get(0).unwrap();
+    let s1 = signers.get(1).unwrap();
+    let err = client
+        .try_propose_signer_change(&s0, &SignerChangeKind::Add, &s1)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, Error::AlreadySigner);
+}
+
+#[test]
+fn test_add_signer_executes_at_threshold() {
+    let (env, signers, client) = setup(3, 2);
+    let s0 = signers.get(0).unwrap();
+    let s1 = signers.get(1).unwrap();
+    let new_signer = Address::generate(&env);
+
+    client.propose_signer_change(&s0, &SignerChangeKind::Add, &new_signer);
+    // s0 already approved; s1 approval reaches threshold=2 → executes.
+    client.approve_signer_change(&s1);
+
+    // New signer can now propose actions.
+    client.propose_multisig_action(&new_signer, &symbol_short!("test"), &payload(&env));
+    let proposal = client.get_proposal(&symbol_short!("test"));
+    assert_eq!(proposal.approvals.len(), 1);
+}
+
+#[test]
+fn test_add_signer_under_threshold_stays_pending() {
+    let (env, signers, client) = setup(3, 3);
+    let s0 = signers.get(0).unwrap();
+    let new_signer = Address::generate(&env);
+
+    client.propose_signer_change(&s0, &SignerChangeKind::Add, &new_signer);
+    let sp = client.get_signer_proposal();
+    assert_eq!(sp.status, ProposalStatus::Pending);
+    assert_eq!(sp.approvals.len(), 1);
+}
+
+#[test]
+fn test_duplicate_signer_proposal_returns_error() {
+    let (env, signers, client) = setup(3, 3);
+    let s0 = signers.get(0).unwrap();
+    let new_signer = Address::generate(&env);
+    let new_signer2 = Address::generate(&env);
+
+    client.propose_signer_change(&s0, &SignerChangeKind::Add, &new_signer);
+    let err = client
+        .try_propose_signer_change(&s0, &SignerChangeKind::Add, &new_signer2)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, Error::ProposalExists);
+}
+
+#[test]
+fn test_duplicate_approve_signer_change_returns_error() {
+    let (env, signers, client) = setup(3, 3);
+    let s0 = signers.get(0).unwrap();
+    let s1 = signers.get(1).unwrap();
+    let new_signer = Address::generate(&env);
+
+    client.propose_signer_change(&s0, &SignerChangeKind::Add, &new_signer);
+    client.approve_signer_change(&s1);
+    let err = client
+        .try_approve_signer_change(&s1)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, Error::AlreadyVoted);
+}
+
+// ── signer lifecycle: remove ──────────────────────────────────────────────────
+
+#[test]
+fn test_remove_signer_executes_at_threshold() {
+    let (env, signers, client) = setup(3, 2);
+    let s0 = signers.get(0).unwrap();
+    let s1 = signers.get(1).unwrap();
+    let s2 = signers.get(2).unwrap();
+
+    client.propose_signer_change(&s0, &SignerChangeKind::Remove, &s2);
+    client.approve_signer_change(&s1);
+
+    // s2 should no longer be a signer.
+    let err = client
+        .try_propose_multisig_action(&s2, &symbol_short!("test"), &payload(&env))
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, Error::NotASigner);
+}
+
+#[test]
+fn test_remove_signer_threshold_breach_returns_error() {
+    // 3 signers, threshold=3 → removing any signer would leave 2 < threshold.
+    let (env, signers, client) = setup(3, 3);
+    let s0 = signers.get(0).unwrap();
+    let s1 = signers.get(1).unwrap();
+    let err = client
+        .try_propose_signer_change(&s0, &SignerChangeKind::Remove, &s1)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, Error::ThresholdBreached);
+}
+
+#[test]
+fn test_remove_non_signer_returns_error() {
+    let (env, signers, client) = setup(3, 2);
+    let s0 = signers.get(0).unwrap();
+    let stranger = Address::generate(&env);
+    let err = client
+        .try_propose_signer_change(&s0, &SignerChangeKind::Remove, &stranger)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, Error::NotASigner);
+}
+
+#[test]
+fn test_approve_signer_change_expired_returns_error() {
+    let (env, signers, client) = setup(3, 3);
+    let s0 = signers.get(0).unwrap();
+    let s1 = signers.get(1).unwrap();
+    let new_signer = Address::generate(&env);
+
+    client.propose_signer_change(&s0, &SignerChangeKind::Add, &new_signer);
+    env.ledger().with_mut(|li| { li.timestamp += 3601; });
+    let err = client
+        .try_approve_signer_change(&s1)
+        .unwrap_err()
+        .unwrap();
+    assert_eq!(err, Error::Expired);
+}

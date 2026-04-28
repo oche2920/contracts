@@ -32,7 +32,7 @@ fn test_initiate_discharge_planning() {
         &expected_discharge_date,
     );
 
-    assert_eq!(plan_id, 0);
+    assert_eq!(plan_id, 1);
 
     // Verify plan was stored
     let plan = client.get_discharge_plan(&plan_id);
@@ -354,8 +354,8 @@ fn test_multiple_discharge_plans() {
     let plan_id_2 =
         client.initiate_discharge_planning(&admin, &patient_id_2, &hospital_id, &1500u64, &2500u64);
 
-    assert_eq!(plan_id_1, 0);
-    assert_eq!(plan_id_2, 1);
+    assert_eq!(plan_id_1, 1);
+    assert_eq!(plan_id_2, 2);
 
     // Verify both plans exist independently
     let plan1 = client.get_discharge_plan(&plan_id_1);

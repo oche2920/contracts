@@ -5,25 +5,11 @@ use soroban_sdk::{Address, Env, String, Vec};
 use ttl_config::critical::{LEDGER_BUMP_AMOUNT, LEDGER_THRESHOLD};
 
 pub fn next_study_id(env: &Env) -> u64 {
-    let id: u64 = env
-        .storage()
-        .instance()
-        .get(&DataKey::StudyCounter)
-        .unwrap_or(0_u64)
-        + 1;
-    env.storage().instance().set(&DataKey::StudyCounter, &id);
-    id
+    safe_increment(env, &DataKey::StudyCounter)
 }
 
 pub fn next_cd_id(env: &Env) -> u64 {
-    let id: u64 = env
-        .storage()
-        .instance()
-        .get(&DataKey::CdCounter)
-        .unwrap_or(0_u64)
-        + 1;
-    env.storage().instance().set(&DataKey::CdCounter, &id);
-    id
+    safe_increment(env, &DataKey::CdCounter)
 }
 
 pub fn save_study(env: &Env, study: &ImagingStudy) {

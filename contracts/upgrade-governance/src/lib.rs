@@ -1,7 +1,8 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env, Vec,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN,
+    Env, Vec,
 };
 
 mod test;
@@ -31,6 +32,10 @@ pub enum Error {
     Cancelled          = 11,
     /// Caller is not authorised to cancel (must be a signer).
     NotAuthorized      = 12,
+    /// Release metadata does not hash to the declared metadata hash.
+    InvalidReleaseMetadata = 13,
+    /// Release metadata hash is not in the approved artifact registry.
+    UnapprovedArtifactMetadata = 14,
 }
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -42,6 +47,7 @@ pub enum DataKey {
     Threshold,
     NextId,
     Proposal(u64),
+    ApprovedArtifactMetadata(BytesN<32>),
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -60,6 +66,8 @@ pub enum ProposalStatus {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UpgradeProposal {
     pub new_wasm_hash: BytesN<32>,
+    pub release_metadata: ReleaseMetadata,
+    pub artifact_metadata_hash: BytesN<32>,
     pub votes: Vec<Address>,
     pub proposed_at: u64,
     /// Timestamp when the threshold was first reached (starts the timelock).
@@ -68,6 +76,14 @@ pub struct UpgradeProposal {
     /// Domain tag: SHA-256(contract_address ++ "upgrade-governance" ++ proposal_id).
     /// Stored so callers can verify the binding off-chain.
     pub domain_tag: BytesN<32>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReleaseMetadata {
+    pub version: Bytes,
+    pub audit_digest: BytesN<32>,
+    pub build_manifest: BytesN<32>,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -95,10 +111,17 @@ impl UpgradeGovernance {
         env: Env,
         proposer: Address,
         new_wasm_hash: BytesN<32>,
+        release_metadata: ReleaseMetadata,
+        artifact_metadata_hash: BytesN<32>,
     ) -> Result<u64, Error> {
         Self::assert_initialized(&env)?;
         proposer.require_auth();
         Self::assert_signer(&env, &proposer)?;
+        Self::validate_release_metadata(
+            &env,
+            &release_metadata,
+            &artifact_metadata_hash,
+        )?;
 
         let proposal_id: u64 = env
             .storage()
@@ -113,6 +136,8 @@ impl UpgradeGovernance {
 
         let proposal = UpgradeProposal {
             new_wasm_hash: new_wasm_hash.clone(),
+            release_metadata,
+            artifact_metadata_hash,
             votes,
             proposed_at: env.ledger().timestamp(),
             approved_at: 0,
@@ -131,6 +156,25 @@ impl UpgradeGovernance {
             .publish((symbol_short!("proposed"), proposal_id), new_wasm_hash);
 
         Ok(proposal_id)
+    }
+
+    /// Allow signers to approve a release artifact metadata hash before execution.
+    pub fn approve_artifact_metadata(
+        env: Env,
+        caller: Address,
+        artifact_metadata_hash: BytesN<32>,
+    ) -> Result<(), Error> {
+        Self::assert_initialized(&env)?;
+        caller.require_auth();
+        Self::assert_signer(&env, &caller)?;
+        env.storage()
+            .persistent()
+            .set(&DataKey::ApprovedArtifactMetadata(artifact_metadata_hash.clone()), &true);
+        env.events().publish(
+            (symbol_short!("meta_appr"), caller),
+            artifact_metadata_hash,
+        );
+        Ok(())
     }
 
     pub fn vote_upgrade(env: Env, voter: Address, proposal_id: u64) -> Result<(), Error> {
@@ -198,6 +242,21 @@ impl UpgradeGovernance {
         if env.ledger().timestamp() < proposal.approved_at + TIMELOCK_DELAY {
             return Err(Error::TimelockActive);
         }
+        let approved = env
+            .storage()
+            .persistent()
+            .get::<DataKey, bool>(&DataKey::ApprovedArtifactMetadata(
+                proposal.artifact_metadata_hash.clone(),
+            ))
+            .unwrap_or(false);
+        if !approved {
+            return Err(Error::UnapprovedArtifactMetadata);
+        }
+        Self::validate_release_metadata(
+            &env,
+            &proposal.release_metadata,
+            &proposal.artifact_metadata_hash,
+        )?;
 
         proposal.status = ProposalStatus::Executed;
         env.storage()
@@ -250,6 +309,161 @@ impl UpgradeGovernance {
             .ok_or(Error::ProposalNotFound)
     }
 
+    // ── signer lifecycle ──────────────────────────────────────────────────────
+
+    /// Propose adding or removing a signer.  Only one signer-change proposal
+    /// may be active at a time.  The proposer's approval is counted immediately.
+    pub fn propose_signer_change(
+        env: Env,
+        proposer: Address,
+        kind: SignerChangeKind,
+        target: Address,
+    ) -> Result<(), Error> {
+        Self::assert_initialized(&env)?;
+        proposer.require_auth();
+        Self::assert_signer(&env, &proposer)?;
+
+        if env.storage().persistent().has(&DataKey::SignerProposal) {
+            return Err(Error::ProposalExists);
+        }
+
+        let signers: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Signers)
+            .ok_or(Error::NotInitialized)?;
+
+        match kind {
+            SignerChangeKind::Add => {
+                for s in signers.iter() {
+                    if s == target {
+                        return Err(Error::AlreadySigner);
+                    }
+                }
+            }
+            SignerChangeKind::Remove => {
+                let threshold: u32 = env
+                    .storage()
+                    .persistent()
+                    .get(&DataKey::Threshold)
+                    .ok_or(Error::NotInitialized)?;
+                if signers.len() <= threshold {
+                    return Err(Error::ThresholdBreached);
+                }
+                let mut found = false;
+                for s in signers.iter() {
+                    if s == target {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(Error::NotASigner);
+                }
+            }
+        }
+
+        let mut approvals: Vec<Address> = Vec::new(&env);
+        approvals.push_back(proposer.clone());
+
+        let proposal = SignerProposal {
+            kind: kind.clone(),
+            target: target.clone(),
+            approvals,
+            proposed_at: env.ledger().timestamp(),
+            status: SignerProposalStatus::Pending,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::SignerProposal, &proposal);
+        env.events()
+            .publish((symbol_short!("sg_prop"), kind), (proposer, target));
+        Ok(())
+    }
+
+    /// Approve the active signer-change proposal.  Executes immediately when
+    /// the approval threshold is reached.
+    pub fn approve_signer_change(env: Env, signer: Address) -> Result<(), Error> {
+        Self::assert_initialized(&env)?;
+        signer.require_auth();
+        Self::assert_signer(&env, &signer)?;
+
+        let mut proposal: SignerProposal = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SignerProposal)
+            .ok_or(Error::ProposalNotFound)?;
+
+        if proposal.status != SignerProposalStatus::Pending {
+            return Err(Error::AlreadyFinalized);
+        }
+
+        if env.ledger().timestamp() > proposal.proposed_at + VOTING_WINDOW {
+            return Err(Error::Expired);
+        }
+
+        for i in 0..proposal.approvals.len() {
+            if proposal.approvals.get(i).unwrap() == signer {
+                return Err(Error::AlreadyVoted);
+            }
+        }
+
+        proposal.approvals.push_back(signer.clone());
+
+        let threshold: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Threshold)
+            .ok_or(Error::NotInitialized)?;
+
+        if proposal.approvals.len() >= threshold {
+            let mut signers: Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::Signers)
+                .ok_or(Error::NotInitialized)?;
+
+            match proposal.kind {
+                SignerChangeKind::Add => {
+                    signers.push_back(proposal.target.clone());
+                }
+                SignerChangeKind::Remove => {
+                    let mut new_signers: Vec<Address> = Vec::new(&env);
+                    for s in signers.iter() {
+                        if s != proposal.target {
+                            new_signers.push_back(s);
+                        }
+                    }
+                    signers = new_signers;
+                }
+            }
+
+            env.storage().persistent().set(&DataKey::Signers, &signers);
+            proposal.status = SignerProposalStatus::Executed;
+            env.storage()
+                .persistent()
+                .remove(&DataKey::SignerProposal);
+            env.events()
+                .publish((symbol_short!("sg_exec"), proposal.kind.clone()), proposal.target.clone());
+        } else {
+            env.storage()
+                .persistent()
+                .set(&DataKey::SignerProposal, &proposal);
+        }
+
+        env.events()
+            .publish((symbol_short!("sg_appr"), signer.clone()), signer);
+        Ok(())
+    }
+
+    pub fn get_signer_proposal(env: Env) -> Result<SignerProposal, Error> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::SignerProposal)
+            .ok_or(Error::ProposalNotFound)
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /// Compute a domain tag that binds a proposal to this specific contract
@@ -265,6 +479,28 @@ impl UpgradeGovernance {
         data.append(&Bytes::from_slice(env, b"upgrade-governance"));
         data.append(&Bytes::from_slice(env, &proposal_id.to_le_bytes()));
         env.crypto().sha256(&data).into()
+    }
+
+    /// Canonical metadata hash = SHA-256("release-metadata-v1" ++ version ++ audit_digest ++ build_manifest)
+    fn compute_artifact_metadata_hash(env: &Env, metadata: &ReleaseMetadata) -> BytesN<32> {
+        let mut data = Bytes::new(env);
+        data.append(&Bytes::from_slice(env, b"release-metadata-v1"));
+        data.append(&metadata.version);
+        data.append(&metadata.audit_digest.clone().into());
+        data.append(&metadata.build_manifest.clone().into());
+        env.crypto().sha256(&data).into()
+    }
+
+    fn validate_release_metadata(
+        env: &Env,
+        metadata: &ReleaseMetadata,
+        declared_hash: &BytesN<32>,
+    ) -> Result<(), Error> {
+        let computed = Self::compute_artifact_metadata_hash(env, metadata);
+        if computed != *declared_hash {
+            return Err(Error::InvalidReleaseMetadata);
+        }
+        Ok(())
     }
 
     // ── guards ────────────────────────────────────────────────────────────────

@@ -22,6 +22,33 @@ fn create_protocol_hash(env: &Env) -> BytesN<32> {
     env.crypto().sha256(&data.into()).into()
 }
 
+fn make_rule(env: &Env, parameter: &str, value: &str) -> CriteriaRule {
+    CriteriaRule {
+        criteria_type: symbol_short!("demo"),
+        parameter: String::from_str(env, parameter),
+        operator: symbol_short!("eq"),
+        value: String::from_str(env, value),
+        mandatory: true,
+    }
+}
+
+fn expected_claim_hash(
+    env: &Env,
+    trial_record_id: u64,
+    patient_data_hash: &BytesN<32>,
+    rule: &CriteriaRule,
+) -> BytesN<32> {
+    let mut payload = Bytes::new(env);
+    payload.append(&Bytes::from_slice(env, b"trial-eligibility-v1"));
+    payload.append(&Bytes::from_slice(env, &trial_record_id.to_be_bytes()));
+    payload.append(&patient_data_hash.clone().into());
+    payload.append(&rule.criteria_type.to_string().into());
+    payload.append(&rule.parameter.to_xdr(env));
+    payload.append(&rule.operator.to_string().into());
+    payload.append(&rule.value.to_xdr(env));
+    env.crypto().sha256(&payload).into()
+}
+
 #[test]
 fn test_initialize() {
     let (env, admin, _, _, client) = create_test_env();

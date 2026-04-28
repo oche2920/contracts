@@ -3,8 +3,8 @@
 #![allow(clippy::too_many_arguments)]
 
 use soroban_sdk::{
-    contract, contractimpl, contracterror, contractevent, symbol_short, Address, BytesN, Env,
-    String, Symbol, Vec,
+    contract, contracterror, contractevent, contractimpl, symbol_short, Address, Bytes, BytesN,
+    Env, String, Symbol, Vec,
 };
 
 mod storage;
@@ -195,22 +195,23 @@ impl ClinicalTrialContract {
         // Get eligibility criteria
         let criteria = storage::get_criteria(&env, trial_record_id)?;
 
-        // In a real implementation, this would evaluate criteria against patient data
-        // For now, we'll create a simplified check
-        let inclusion_count = criteria.inclusion_criteria.len();
-        let exclusion_count = criteria.exclusion_criteria.len();
-
         let mut met_inclusion = Vec::new(&env);
         let mut met_exclusion = Vec::new(&env);
         let disqualifying_factors = Vec::new(&env);
+        let mut evaluation_artifacts = Vec::new(&env);
 
-        // Simulate criteria evaluation (in production, this would use patient_data_hash)
-        for _ in 0..inclusion_count {
-            met_inclusion.push_back(true);
+        for rule in criteria.inclusion_criteria.iter() {
+            let (passed, artifact) =
+                Self::evaluate_rule(&env, trial_record_id, &patient_data_hash, &rule, &claim_evidence);
+            met_inclusion.push_back(passed);
+            evaluation_artifacts.push_back(artifact);
         }
 
-        for _ in 0..exclusion_count {
-            met_exclusion.push_back(false);
+        for rule in criteria.exclusion_criteria.iter() {
+            let (matched, artifact) =
+                Self::evaluate_rule(&env, trial_record_id, &patient_data_hash, &rule, &claim_evidence);
+            met_exclusion.push_back(matched);
+            evaluation_artifacts.push_back(artifact);
         }
 
         let eligible = met_inclusion.iter().all(|x| x) && met_exclusion.iter().all(|x| !x);
@@ -220,6 +221,7 @@ impl ClinicalTrialContract {
             met_inclusion,
             met_exclusion,
             disqualifying_factors,
+            evaluation_artifacts,
         })
     }
 
@@ -607,6 +609,74 @@ impl ClinicalTrialContract {
         }
 
         Ok(event)
+    }
+
+    fn evaluate_rule(
+        env: &Env,
+        trial_record_id: u64,
+        patient_data_hash: &BytesN<32>,
+        rule: &CriteriaRule,
+        claim_evidence: &Vec<EligibilityClaimEvidence>,
+    ) -> (bool, RuleEvaluationArtifact) {
+        let expected_claim_hash =
+            Self::compute_expected_claim_hash(env, trial_record_id, patient_data_hash, rule);
+
+        for evidence in claim_evidence.iter() {
+            if evidence.claim_hash == expected_claim_hash {
+                return (
+                    true,
+                    RuleEvaluationArtifact {
+                        criteria_type: rule.criteria_type.clone(),
+                        parameter: rule.parameter.clone(),
+                        operator: rule.operator.clone(),
+                        value: rule.value.clone(),
+                        expected_claim_hash: expected_claim_hash.clone(),
+                        matched_claim_hash: Some(evidence.claim_hash),
+                        evidence_type: Some(evidence.evidence_type),
+                        passed: true,
+                        explanation: String::from_str(
+                            env,
+                            "Matched deterministic claim hash from attestation/zk evidence",
+                        ),
+                    },
+                );
+            }
+        }
+
+        (
+            false,
+            RuleEvaluationArtifact {
+                criteria_type: rule.criteria_type.clone(),
+                parameter: rule.parameter.clone(),
+                operator: rule.operator.clone(),
+                value: rule.value.clone(),
+                expected_claim_hash,
+                matched_claim_hash: None,
+                evidence_type: None,
+                passed: false,
+                explanation: String::from_str(
+                    env,
+                    "No matching deterministic claim hash found for rule",
+                ),
+            },
+        )
+    }
+
+    fn compute_expected_claim_hash(
+        env: &Env,
+        trial_record_id: u64,
+        patient_data_hash: &BytesN<32>,
+        rule: &CriteriaRule,
+    ) -> BytesN<32> {
+        let mut payload = Bytes::new(env);
+        payload.append(&Bytes::from_slice(env, b"trial-eligibility-v1"));
+        payload.append(&Bytes::from_slice(env, &trial_record_id.to_be_bytes()));
+        payload.append(&patient_data_hash.clone().into());
+        payload.append(&rule.criteria_type.to_string().into());
+        payload.append(&rule.parameter.to_xdr(env));
+        payload.append(&rule.operator.to_string().into());
+        payload.append(&rule.value.to_xdr(env));
+        env.crypto().sha256(&payload).into()
     }
 }
 
