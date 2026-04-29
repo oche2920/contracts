@@ -21,6 +21,12 @@ This README provides a quick operational map for integration, testing, and deplo
 - `get_statistics`
 - `record_metric`
 - `record_quality_metric`
+- `request_report`
+- `execute_next_report`
+- `complete_report`
+- `fail_report`
+- `get_resource_limits`
+- `set_resource_limits`
 
 ## Auth Model
 

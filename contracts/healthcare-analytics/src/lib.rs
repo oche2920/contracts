@@ -2,12 +2,15 @@
 #![allow(deprecated)]
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
+    contract, contracterror, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env,
     String, Symbol, Vec,
 };
 use shared::resource_management::{
-    create_report_job, complete_job, get_next_job_for_execution, get_system_limits,
-    set_system_limits, should_throttle_job, JobPriority, ResourceQuota, ResourceUsage,
+    create_report_job, complete_job, get_job, get_next_job_for_execution, get_system_limits,
+    set_system_limits, should_throttle_job, JobPriority, JobState, ResourceKey, ResourceQuota, ResourceUsage,
+};
+use shared::incident_tracking::{
+    capture_incident, attach_evidence, IncidentSeverity, EvidenceType,
 };
 
 /// --------------------
@@ -78,6 +81,8 @@ pub enum Error {
     JobThrottled = 5,
     InsufficientResources = 6,
     JobNotFound = 7,
+    ResourceOverrun = 8,
+    JobFailure = 9,
 }
 
 #[contract]
@@ -109,6 +114,21 @@ impl HealthcareAnalytics {
 
         // Check if system is throttled
         if should_throttle_job(&env) {
+            // Capture incident for throttling
+            let incident_id = capture_incident(
+                &env,
+                IncidentSeverity::High,
+                String::from_str(&env, "healthcare-analytics"),
+                5, // Throttling error code
+                String::from_str(&env, "Report job throttled due to resource constraints"),
+                requester.clone(),
+            );
+            // Attach evidence: current resource usage
+            let cpu_used: u64 = env.storage().instance().get(&ResourceKey::TotalCpuUsed).unwrap_or(0);
+            let memory_used: u64 = env.storage().instance().get(&ResourceKey::TotalMemoryUsed).unwrap_or(0);
+            let evidence_str = String::from_str(&env, "Current resource usage snapshot");
+            let hash = env.crypto().sha256(evidence_str.as_bytes());
+            let _ = attach_evidence(&env, incident_id, EvidenceType::StateSnapshot, hash, requester.clone());
             return Err(Error::JobThrottled);
         }
 
@@ -146,11 +166,71 @@ impl HealthcareAnalytics {
 
     /// Mark a report job as completed with actual resource usage
     pub fn complete_report(env: Env, job_id: u64, cpu_used: u64, memory_used: u64) -> Result<(), Error> {
+        let job = get_job(&env, job_id).map_err(|_| Error::JobNotFound)?;
         complete_job(&env, job_id, cpu_used, memory_used)
             .map_err(|_| Error::JobNotFound)?;
 
+        // Check for resource overrun
+        if cpu_used > job.quota.cpu_units || memory_used > job.quota.memory_units {
+            let incident_id = capture_incident(
+                &env,
+                IncidentSeverity::Medium,
+                String::from_str(&env, "healthcare-analytics"),
+                8, // Resource overrun error code
+                String::from_str(&env, "Job exceeded resource quota"),
+                job.requested_by.clone(),
+            );
+            let evidence_str = String::from_str(&env, "Resource usage exceeded estimated quota");
+            let hash = env.crypto().sha256(evidence_str.as_bytes());
+            let _ = attach_evidence(&env, incident_id, EvidenceType::ContextData, hash, job.requested_by);
+        }
+
         env.events()
             .publish((symbol_short!("job_done"), job_id), (cpu_used, memory_used));
+
+        Ok(())
+    }
+
+    /// Mark a report job as failed and capture incident
+    pub fn fail_report(env: Env, job_id: u64, error_message: String, requester: Address) -> Result<(), Error> {
+        requester.require_auth();
+
+        let mut job = get_job(&env, job_id).map_err(|_| Error::JobNotFound)?;
+        job.state = JobState::Failed;
+        env.storage().persistent().set(&ResourceKey::ReportJob(job_id), &job);
+
+        // Remove from running jobs
+        let mut running: Vec<u64> = env
+            .storage()
+            .persistent()
+            .get(&ResourceKey::RunningJobs)
+            .unwrap_or(Vec::new(&env));
+        let mut new_running = Vec::new(&env);
+        for i in 0..running.len() {
+            if let Ok(id) = running.get(i) {
+                if id != job_id {
+                    new_running.push_back(id);
+                }
+            }
+        }
+        env.storage()
+            .persistent()
+            .set(&ResourceKey::RunningJobs, &new_running);
+
+        // Capture incident for job failure
+        let incident_id = capture_incident(
+            &env,
+            IncidentSeverity::High,
+            String::from_str(&env, "healthcare-analytics"),
+            9, // Job failure error code
+            String::from_str(&env, "Report job failed"),
+            requester.clone(),
+        );
+        let hash = env.crypto().sha256(error_message.as_bytes());
+        let _ = attach_evidence(&env, incident_id, EvidenceType::ErrorLog, hash, requester);
+
+        env.events()
+            .publish((symbol_short!("job_fail"), job_id), error_message);
 
         Ok(())
     }
