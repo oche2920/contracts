@@ -2,7 +2,8 @@
 #![allow(deprecated)]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror, symbol_short, Address, Env, String,
+    contract, contractimpl, contracttype, contracterror, symbol_short, Address, BytesN, Env,
+    String,
 };
 
 mod test;
@@ -18,6 +19,27 @@ pub enum Error {
     Unauthorized       = 3,
     NotAProvider       = 4,
     RecordNotFound     = 5,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CredentialAnchor {
+    pub credential_hash: BytesN<32>,
+    pub issuer: Address,
+    pub attestation_hash: BytesN<32>,
+    pub expires_at: u64,
+    pub revocation_reference: BytesN<32>,
+    pub revoked_at: Option<u64>,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProviderProfile {
+    pub name: String,
+    pub specialty: String,
+    pub license_number: String,
+    pub credential: CredentialAnchor,
+    pub active: bool,
 }
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -51,9 +73,35 @@ impl ProviderRegistry {
         Ok(())
     }
 
-    pub fn register_provider(env: Env, admin: Address, provider: Address) -> Result<(), Error> {
+    pub fn register_provider(
+        env: Env,
+        admin: Address,
+        provider: Address,
+        name: String,
+        specialty: String,
+        license_number: String,
+        credential_hash: BytesN<32>,
+        issuer: Address,
+        attestation_hash: BytesN<32>,
+        expires_at: u64,
+        revocation_reference: BytesN<32>,
+    ) -> Result<(), Error> {
         Self::assert_initialized(&env)?;
         Self::assert_admin(&env, &admin)?;
+        let profile = ProviderProfile {
+            name,
+            specialty,
+            license_number,
+            credential: CredentialAnchor {
+                credential_hash,
+                issuer,
+                attestation_hash,
+                expires_at,
+                revocation_reference,
+                revoked_at: None,
+            },
+            active: true,
+        };
         env.storage()
             .persistent()
             .set(&DataKey::Provider(provider.clone()), &profile);
@@ -65,14 +113,15 @@ impl ProviderRegistry {
     pub fn revoke_provider(env: Env, admin: Address, provider: Address) -> Result<(), Error> {
         Self::assert_initialized(&env)?;
         Self::assert_admin(&env, &admin)?;
-        env.storage()
+        let key = DataKey::Provider(provider.clone());
+        let mut profile: ProviderProfile = env
+            .storage()
             .persistent()
             .get(&key)
-            .ok_or(ContractError::NotFound)?;
+            .ok_or(Error::RecordNotFound)?;
 
         profile.active = false;
         profile.credential.revoked_at = Some(env.ledger().timestamp());
-        profile.credential.revoked_by = Some(admin.clone());
         env.storage().persistent().set(&key, &profile);
 
         env.events()
@@ -81,17 +130,25 @@ impl ProviderRegistry {
     }
 
     pub fn is_provider(env: Env, provider: Address) -> bool {
-        Self::provider_is_active(&env, &provider)
+        Self::is_provider_active(&env, &provider)
+    }
+
+    fn is_provider_active(env: &Env, provider: &Address) -> bool {
+        if let Some(profile) = env.storage().persistent().get(&DataKey::Provider(provider.clone())) {
+            profile.active && profile.credential.revoked_at.is_none() && profile.credential.expires_at > env.ledger().timestamp()
+        } else {
+            false
+        }
     }
 
     pub fn get_provider_profile(
         env: Env,
         provider: Address,
-    ) -> Result<ProviderProfile, ContractError> {
+    ) -> Result<ProviderProfile, Error> {
         env.storage()
             .persistent()
             .get(&DataKey::Provider(provider))
-            .ok_or(ContractError::NotFound)
+            .ok_or(Error::RecordNotFound)
     }
 
     pub fn add_record(

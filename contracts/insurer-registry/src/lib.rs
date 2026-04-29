@@ -22,13 +22,13 @@ pub enum Error {
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct InsurerData {
-    pub name: String,
-    pub license_id: String,
-    pub contact_details: String,
-    pub coverage_policies: String,
-    pub metadata: String,
-    pub credential: CredentialAnchor,
+pub struct CredentialAnchor {
+    pub credential_hash: BytesN<32>,
+    pub issuer: Address,
+    pub attestation_hash: BytesN<32>,
+    pub expires_at: u64,
+    pub revocation_reference: BytesN<32>,
+    pub revoked_at: Option<u64>,
 }
 
 #[contracttype]
@@ -55,6 +55,11 @@ impl InsurerRegistry {
         name: String,
         license_id: String,
         metadata: String,
+        credential_hash: BytesN<32>,
+        issuer: Address,
+        attestation_hash: BytesN<32>,
+        expires_at: u64,
+        revocation_reference: BytesN<32>,
     ) -> Result<(), Error> {
         wallet.require_auth();
         issuer.require_auth();
@@ -189,6 +194,14 @@ impl InsurerRegistry {
             .persistent()
             .get(&key)
             .ok_or(Error::InsurerNotFound)
+    }
+
+    pub fn is_insurer_active(env: Env, wallet: Address) -> bool {
+        if let Ok(insurer) = Self::get_insurer(env, wallet) {
+            insurer.credential.revoked_at.is_none() && insurer.credential.expires_at > env.ledger().timestamp()
+        } else {
+            false
+        }
     }
 
     // =====================================================

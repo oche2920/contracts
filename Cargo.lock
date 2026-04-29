@@ -322,6 +322,7 @@ dependencies = [
 name = "clinical-trial"
 version = "0.1.0"
 dependencies = [
+ "Contracts",
  "soroban-sdk",
 ]
 
@@ -963,6 +964,7 @@ name = "imaging-radiology"
 version = "0.0.0"
 dependencies = [
  "Contracts",
+ "shared",
  "soroban-sdk",
 ]
 

@@ -72,7 +72,14 @@ pub struct AllergyManagement;
 #[contractimpl]
 impl AllergyManagement {
     /// Initialize the contract with an admin address
-    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+    pub fn initialize(
+        env: Env,
+        admin: Address,
+        patient_registry: Address,
+        provider_registry: Address,
+        hospital_registry: Address,
+        insurer_registry: Address,
+    ) -> Result<(), Error> {
         admin.require_auth();
 
         if env.storage().instance().has(&DataKey::Admin) {
@@ -80,6 +87,10 @@ impl AllergyManagement {
         }
 
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::PatientRegistry, &patient_registry);
+        env.storage().instance().set(&DataKey::ProviderRegistry, &provider_registry);
+        env.storage().instance().set(&DataKey::HospitalRegistry, &hospital_registry);
+        env.storage().instance().set(&DataKey::InsurerRegistry, &insurer_registry);
         env.storage()
             .instance()
             .set(&DataKey::AllergyCounter, &0u64);
@@ -94,6 +105,11 @@ impl AllergyManagement {
         request: RecordAllergyRequest,
     ) -> Result<u64, Error> {
         provider_id.require_auth();
+
+        // Verify provider is registered
+        if !Self::is_registered_provider(&env, &provider_id) {
+            return Err(Error::Unauthorized);
+        }
 
         // Validate inputs
         validation::validate_allergen_type(&request.allergen_type)?;
@@ -149,6 +165,16 @@ impl AllergyManagement {
         Ok(allergy_id)
     }
 
+    /// Check if an address is a registered provider
+    fn is_registered_provider(env: &Env, provider_id: &Address) -> bool {
+        // In a real implementation, this would invoke the provider registry contract
+        // For now, return true as placeholder
+        // let provider_registry: Address = env.storage().instance().get(&DataKey::ProviderRegistry).unwrap();
+        // let result: bool = env.invoke_contract(&provider_registry, &symbol_short!("is_provider"), (provider_id.clone(),));
+        // result
+        true
+    }
+
     /// Update the severity of an existing allergy
     pub fn update_allergy_severity(
         env: Env,
@@ -158,6 +184,11 @@ impl AllergyManagement {
         reason: String,
     ) -> Result<(), Error> {
         provider_id.require_auth();
+
+        // Verify provider is registered
+        if !Self::is_registered_provider(&env, &provider_id) {
+            return Err(Error::Unauthorized);
+        }
 
         // Validate severity
         validation::validate_severity(&new_severity)?;

@@ -72,4 +72,8 @@ pub enum DataKey {
     PatientAllergies(Address),
     AccessControl(Address, Address),  // (patient, provider)
     CrossSensitivity(String, String), // (allergen1, allergen2)
+    PatientRegistry,
+    ProviderRegistry,
+    HospitalRegistry,
+    InsurerRegistry,
 }

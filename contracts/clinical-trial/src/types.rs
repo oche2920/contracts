@@ -217,4 +217,5 @@ pub enum DataKey {
     AdverseEvent(u64),
     ProtocolDeviation(u64, u64),
     SafetyReport(u64, u64),
+    PatientRegistry,
 }

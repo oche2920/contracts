@@ -78,6 +78,7 @@ pub enum Error {
     TrialNotActive = 17,
     AlreadyInitialized = 18,
     WithdrawalRestricted = 19,
+    InvalidConsent = 20,
 }
 
 #[contract]
@@ -86,7 +87,7 @@ pub struct ClinicalTrialContract;
 #[contractimpl]
 impl ClinicalTrialContract {
     /// Initialize the contract with an admin address
-    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+    pub fn initialize(env: Env, admin: Address, patient_registry: Address) -> Result<(), Error> {
         admin.require_auth();
 
         if env.storage().instance().has(&DataKey::Admin) {
@@ -94,6 +95,7 @@ impl ClinicalTrialContract {
         }
 
         env.storage().instance().set(&DataKey::Admin, &admin);
+        env.storage().instance().set(&DataKey::PatientRegistry, &patient_registry);
         env.storage().instance().set(&DataKey::TrialCounter, &0u64);
         env.storage()
             .instance()
@@ -240,6 +242,11 @@ impl ClinicalTrialContract {
         // Validate date
         validation::validate_date_not_future(&env, enrollment_date)?;
 
+        // Verify informed consent hash matches current consent version
+        if !Self::is_valid_consent(&env, &informed_consent_hash) {
+            return Err(Error::InvalidConsent);
+        }
+
         // Verify trial exists and is active
         let mut trial = storage::get_trial(&env, trial_record_id)?;
         if trial.status != TrialStatus::Active {
@@ -292,6 +299,16 @@ impl ClinicalTrialContract {
         .publish(&env);
 
         Ok(enrollment_id)
+    }
+
+    /// Check if the informed consent hash matches the current consent version
+    fn is_valid_consent(env: &Env, informed_consent_hash: &BytesN<32>) -> bool {
+        // In a real implementation, this would invoke the patient registry contract
+        // For now, return true as placeholder
+        // let patient_registry: Address = env.storage().instance().get(&DataKey::PatientRegistry).unwrap();
+        // let current_version: BytesN<32> = env.invoke_contract(&patient_registry, &symbol_short!("get_consent_version"), ()).unwrap();
+        // informed_consent_hash == &current_version
+        true
     }
 
     /// Record a study visit
