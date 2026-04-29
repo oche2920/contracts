@@ -2,9 +2,9 @@
 
 use soroban_sdk::{
     contract, contracterror, contractevent, contractimpl, symbol_short, Address, Env, String,
-    Symbol, Vec,
+    Symbol, Vec, Bytes,
 };
-use shared::{events::EVENT_VERSION, temporal};
+use shared::{events::EVENT_VERSION, temporal, incident_tracking};
 
 mod storage;
 mod types;
@@ -48,6 +48,14 @@ pub struct AccessRevoked {
     pub version: u32,
     pub patient_id: Address,
     pub provider_id: Address,
+}
+
+#[contractevent]
+pub struct IncidentCaptured {
+    pub version: u32,
+    pub incident_id: u64,
+    pub severity: Symbol,
+    pub contract: String,
 }
 
 /// Error codes for allergy management operations
@@ -174,6 +182,92 @@ impl AllergyManagement {
         // result
         true
     }
+
+    /// Capture an incident for troubleshooting (structured evidence capture)
+    pub fn capture_incident(
+        env: Env,
+        error_code: u32,
+        description: String,
+        severity_level: Symbol, // "low", "medium", "high", "critical"
+        reporter: Address,
+    ) -> Result<u64, Error> {
+        reporter.require_auth();
+
+        let severity = match severity_level.to_string().as_str() {
+            "critical" => incident_tracking::IncidentSeverity::Critical,
+            "high" => incident_tracking::IncidentSeverity::High,
+            "medium" => incident_tracking::IncidentSeverity::Medium,
+            _ => incident_tracking::IncidentSeverity::Low,
+        };
+
+        let incident_id = incident_tracking::capture_incident(
+            &env,
+            severity.clone(),
+            String::from_str(&env, "allergy-management"),
+            error_code,
+            description,
+            reporter.clone(),
+        );
+
+        let severity_symbol = match severity {
+            incident_tracking::IncidentSeverity::Critical => symbol_short!("crit"),
+            incident_tracking::IncidentSeverity::High => symbol_short!("high"),
+            incident_tracking::IncidentSeverity::Medium => symbol_short!("med"),
+            incident_tracking::IncidentSeverity::Low => symbol_short!("low"),
+        };
+
+        IncidentCaptured {
+            version: EVENT_VERSION,
+            incident_id,
+            severity: severity_symbol,
+            contract: String::from_str(&env, "allergy-management"),
+        }
+        .publish(&env);
+
+        Ok(incident_id)
+    }
+
+    /// Attach diagnostic evidence to an incident
+    pub fn attach_incident_evidence(
+        env: Env,
+        incident_id: u64,
+        evidence_type: Symbol, // "error_log", "state_snapshot", "stack_trace", "context"
+        evidence_hash: Bytes,
+        recorder: Address,
+    ) -> Result<u32, Error> {
+        recorder.require_auth();
+
+        let evidence_kind = match evidence_type.to_string().as_str() {
+            "state_snapshot" => incident_tracking::EvidenceType::StateSnapshot,
+            "stack_trace" => incident_tracking::EvidenceType::StackTrace,
+            "context" => incident_tracking::EvidenceType::ContextData,
+            "validation_failure" => incident_tracking::EvidenceType::ValidationFailure,
+            _ => incident_tracking::EvidenceType::ErrorLog,
+        };
+
+        incident_tracking::attach_evidence(&env, incident_id, evidence_kind, evidence_hash, recorder)
+            .map_err(|_| Error::AccessDenied)
+    }
+
+    /// Retrieve incident details for troubleshooting
+    pub fn get_incident_details(env: Env, incident_id: u64) -> Result<(u64, u32, bool), Error> {
+        let incident = incident_tracking::get_incident(&env, incident_id)
+            .map_err(|_| Error::AccessDenied)?;
+        Ok((incident.reported_at, incident.error_code, incident.resolved))
+    }
+
+    /// Mark incident as resolved
+    pub fn resolve_incident(
+        env: Env,
+        incident_id: u64,
+        admin: Address,
+        resolution_note: String,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+        incident_tracking::resolve_incident(&env, incident_id, resolution_note)
+            .map_err(|_| Error::AccessDenied)
+    }
+}
 
     /// Update the severity of an existing allergy
     pub fn update_allergy_severity(

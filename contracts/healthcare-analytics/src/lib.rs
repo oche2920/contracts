@@ -5,6 +5,10 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, symbol_short, Address, BytesN, Env,
     String, Symbol, Vec,
 };
+use shared::resource_management::{
+    create_report_job, complete_job, get_next_job_for_execution, get_system_limits,
+    set_system_limits, should_throttle_job, JobPriority, ResourceQuota, ResourceUsage,
+};
 
 /// --------------------
 /// Data Structures
@@ -56,6 +60,7 @@ pub enum DataKey {
     QualityMetricCounter,
     QualityMetric(u64),
     QualityMetricsByProvider(Address),
+    Admin,
 }
 
 /// --------------------
@@ -70,6 +75,9 @@ pub enum Error {
     NoDataFound = 2,
     Unauthorized = 3,
     InvalidValue = 4,
+    JobThrottled = 5,
+    InsufficientResources = 6,
+    JobNotFound = 7,
 }
 
 #[contract]
@@ -77,7 +85,118 @@ pub struct HealthcareAnalytics;
 
 #[contractimpl]
 impl HealthcareAnalytics {
-    /// Record an anonymized metric for population health analytics.
+    /// Initialize the analytics contract with admin and resource limits
+    pub fn initialize(env: Env, admin: Address) -> Result<(), Error> {
+        admin.require_auth();
+        if env.storage().instance().has(&DataKey::Admin) {
+            return Err(Error::Unauthorized);
+        }
+        env.storage().instance().set(&DataKey::Admin, &admin);
+        Ok(())
+    }
+
+    /// Request a report generation job
+    /// Returns job_id if accepted, or error if throttled/insufficient resources
+    pub fn request_report(
+        env: Env,
+        requester: Address,
+        report_type: String,
+        priority: JobPriority,
+        estimated_cpu: u64,
+        estimated_memory: u64,
+    ) -> Result<u64, Error> {
+        requester.require_auth();
+
+        // Check if system is throttled
+        if should_throttle_job(&env) {
+            return Err(Error::JobThrottled);
+        }
+
+        let quota = ResourceQuota {
+            cpu_units: estimated_cpu,
+            memory_units: estimated_memory,
+            timeout_seconds: 300, // 5 minutes default
+        };
+
+        // Create the job via shared module
+        let job_id = create_report_job(&env, report_type.clone(), priority, requester, quota);
+
+        env.events().publish(
+            (symbol_short!("report_job"), requester),
+            (report_type, job_id),
+        );
+
+        Ok(job_id)
+    }
+
+    /// Execute next available report job (respects resource limits)
+    /// Returns job_id if a job was started, or None if queue empty or resources exhausted
+    pub fn execute_next_report(env: Env) -> Option<u64> {
+        // Admin-only operation
+        if let Some(job_id) = get_next_job_for_execution(&env) {
+            // Start execution (in real implementation, this would spawn background job)
+            let _ = shared::resource_management::start_job(&env, job_id);
+            env.events()
+                .publish((symbol_short!("exec_job"), job_id), symbol_short!("started"));
+            Some(job_id)
+        } else {
+            None
+        }
+    }
+
+    /// Mark a report job as completed with actual resource usage
+    pub fn complete_report(env: Env, job_id: u64, cpu_used: u64, memory_used: u64) -> Result<(), Error> {
+        complete_job(&env, job_id, cpu_used, memory_used)
+            .map_err(|_| Error::JobNotFound)?;
+
+        env.events()
+            .publish((symbol_short!("job_done"), job_id), (cpu_used, memory_used));
+
+        Ok(())
+    }
+
+    /// Get system resource limits for monitoring
+    pub fn get_resource_limits(env: Env) -> (u64, u64, u32, u64) {
+        let limits = get_system_limits(&env);
+        (
+            limits.total_cpu_budget,
+            limits.total_memory_budget,
+            limits.max_concurrent_jobs,
+            limits.throttle_threshold,
+        )
+    }
+
+    /// Set system resource limits (admin only)
+    pub fn set_resource_limits(
+        env: Env,
+        admin: Address,
+        cpu_budget: u64,
+        memory_budget: u64,
+        max_concurrent: u32,
+        throttle_percent: u64,
+    ) -> Result<(), Error> {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::Unauthorized)?;
+        if admin != stored_admin {
+            return Err(Error::Unauthorized);
+        }
+
+        set_system_limits(
+            &env,
+            shared::resource_management::SystemResourceLimits {
+                max_concurrent_jobs: max_concurrent,
+                total_cpu_budget: cpu_budget,
+                total_memory_budget: memory_budget,
+                throttle_threshold: throttle_percent,
+            },
+        );
+
+        Ok(())
+    }
     /// Privacy is preserved by accepting only pre-anonymized, aggregate-ready
     /// values with an optional metadata hash instead of raw patient data.
     pub fn record_metric(
